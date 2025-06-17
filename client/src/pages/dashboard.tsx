@@ -9,7 +9,7 @@ import { SentimentAnalysis } from '@/components/dashboard/sentiment-analysis';
 import { RecentEmails } from '@/components/dashboard/recent-emails';
 import { TaskManagement } from '@/components/dashboard/task-management';
 import { TeamPerformance } from '@/components/dashboard/team-performance';
-import { AuthManager, MockMSAL } from '@/lib/auth';
+import { AuthManager, MSALService } from '@/lib/auth';
 import { apiRequest } from '@/lib/queryClient';
 import type { 
   DashboardMetrics, 
@@ -68,7 +68,7 @@ export default function Dashboard() {
     setIsSyncing(true);
     try {
       // Get fresh access token
-      const msalResult = await MockMSAL.signIn();
+      const msalResult = await MSALService.signIn();
       
       // Sync emails
       const response = await apiRequest('POST', '/api/emails/sync', {

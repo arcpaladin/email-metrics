@@ -13,7 +13,13 @@ export const msalConfig: Configuration = {
 };
 
 export const loginRequest = {
-  scopes: ['User.Read', 'Mail.Read', 'User.Read.All'],
+  scopes: [
+    'User.Read',
+    'Mail.Read', 
+    'Mail.ReadWrite',
+    'Directory.Read.All',
+    'User.ReadBasic.All'
+  ],
 };
 
 export const msalInstance = new PublicClientApplication(msalConfig);

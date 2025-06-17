@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
-import { AuthManager, MockMSAL } from '@/lib/auth';
+import { AuthManager, MSALService } from '@/lib/auth';
 import { apiRequest } from '@/lib/queryClient';
 
 interface AuthModalProps {
@@ -19,7 +19,7 @@ export function AuthModal({ isOpen, onClose, onSuccess }: AuthModalProps) {
     setIsLoading(true);
     try {
       // Get access token from Microsoft
-      const msalResult = await MockMSAL.signIn();
+      const msalResult = await MSALService.signIn();
       
       // Authenticate with our backend
       const response = await apiRequest('POST', '/api/auth/microsoft', {

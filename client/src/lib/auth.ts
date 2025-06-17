@@ -42,35 +42,33 @@ export class MSALService {
       // Check if user is already signed in
       const accounts = msalInstance.getAllAccounts();
       
-      let authResult: AuthenticationResult;
-      
       if (accounts.length > 0) {
         // User is already signed in, try to get token silently
         try {
-          authResult = await msalInstance.acquireTokenSilent({
+          const authResult = await msalInstance.acquireTokenSilent({
             ...loginRequest,
             account: accounts[0],
           });
+          return {
+            accessToken: authResult.accessToken
+          };
         } catch (error) {
           // Silent token acquisition failed, fall back to interactive
-          await msalInstance.acquireTokenRedirect(loginRequest);
-          throw new Error('Redirect initiated'); // This will be handled by redirect
+          const authResult = await msalInstance.acquireTokenPopup(loginRequest);
+          return {
+            accessToken: authResult.accessToken
+          };
         }
       } else {
         // No user signed in, initiate login
-        await msalInstance.loginRedirect(loginRequest);
-        throw new Error('Redirect initiated'); // This will be handled by redirect
+        const authResult = await msalInstance.loginPopup(loginRequest);
+        return {
+          accessToken: authResult.accessToken
+        };
       }
-
-      return {
-        accessToken: authResult.accessToken
-      };
     } catch (error: any) {
-      if (error.message === 'Redirect initiated') {
-        throw error;
-      }
       console.error('Authentication error:', error);
-      throw new Error('Authentication failed');
+      throw new Error('Microsoft Graph API authentication failed. Please ensure your Azure AD application is properly configured with the required permissions.');
     }
   }
 
@@ -85,7 +83,7 @@ export class MSALService {
       return null;
     } catch (error) {
       console.error('Redirect handling error:', error);
-      throw error;
+      return null;
     }
   }
 }
