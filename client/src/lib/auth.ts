@@ -30,7 +30,7 @@ export class AuthManager {
     msalInstance.logoutRedirect().catch(console.error);
   }
 
-  static getAuthHeaders() {
+  static getAuthHeaders(): Record<string, string> {
     const token = this.getToken();
     return token ? { Authorization: `Bearer ${token}` } : {};
   }

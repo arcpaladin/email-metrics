@@ -47,15 +47,13 @@ export function Sidebar({ user }: SidebarProps) {
         <ul className="space-y-1">
           {navItems.map((item) => (
             <li key={item.path}>
-              <Link href={item.path}>
-                <a className={`flex items-center px-3 py-2 rounded-lg transition-all ${
-                  location === item.path
-                    ? 'bg-blue-50 text-blue-600 font-medium'
-                    : 'text-gray-700 hover:bg-gray-100'
-                }`}>
-                  <i className={`${item.icon} w-5 h-5 mr-3`}></i>
-                  {item.label}
-                </a>
+              <Link href={item.path} className={`flex items-center px-3 py-2 rounded-lg transition-all ${
+                location === item.path
+                  ? 'bg-blue-50 text-blue-600 font-medium'
+                  : 'text-gray-700 hover:bg-gray-100'
+              }`}>
+                <i className={`${item.icon} w-5 h-5 mr-3`}></i>
+                {item.label}
               </Link>
             </li>
           ))}
