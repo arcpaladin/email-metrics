@@ -74,7 +74,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Email sync route
-  app.post('/api/emails/sync', authenticateToken, async (req, res) => {
+  app.post('/api/emails/sync', authenticateToken, async (req: any, res: any) => {
     try {
       const { accessToken } = req.body;
       const user = req.user;
@@ -180,7 +180,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Dashboard data routes
-  app.get('/api/dashboard/metrics', authenticateToken, async (req, res) => {
+  app.get('/api/dashboard/metrics', authenticateToken, async (req: any, res: any) => {
     try {
       const user = req.user;
       const metrics = await storage.getEmailMetrics(user.organizationId);
@@ -191,7 +191,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/dashboard/sentiment', authenticateToken, async (req, res) => {
+  app.get('/api/dashboard/sentiment', authenticateToken, async (req: any, res: any) => {
     try {
       const user = req.user;
       const sentiment = await storage.getSentimentAnalytics(user.organizationId);
@@ -202,7 +202,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/dashboard/email-volume', authenticateToken, async (req, res) => {
+  app.get('/api/dashboard/email-volume', authenticateToken, async (req: any, res: any) => {
     try {
       const user = req.user;
       const days = parseInt(req.query.days as string) || 7;
@@ -214,7 +214,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/emails/recent', authenticateToken, async (req, res) => {
+  app.get('/api/emails/recent', authenticateToken, async (req: any, res: any) => {
     try {
       const limit = parseInt(req.query.limit as string) || 10;
       const emails = await storage.getRecentEmails(limit);
@@ -225,7 +225,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/tasks/recent', authenticateToken, async (req, res) => {
+  app.get('/api/tasks/recent', authenticateToken, async (req: any, res: any) => {
     try {
       const limit = parseInt(req.query.limit as string) || 10;
       const tasks = await storage.getRecentTasks(limit);
@@ -236,7 +236,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put('/api/tasks/:id/status', authenticateToken, async (req, res) => {
+  app.put('/api/tasks/:id/status', authenticateToken, async (req: any, res: any) => {
     try {
       const taskId = parseInt(req.params.id);
       const { status } = req.body;
@@ -253,7 +253,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/employees/team', authenticateToken, async (req, res) => {
+  app.get('/api/employees/team', authenticateToken, async (req: any, res: any) => {
     try {
       const user = req.user;
       if (!user.organizationId) {
