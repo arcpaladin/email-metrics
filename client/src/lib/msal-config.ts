@@ -3,7 +3,7 @@ import { Configuration, PublicClientApplication } from '@azure/msal-browser';
 export const msalConfig: Configuration = {
   auth: {
     clientId: import.meta.env.VITE_AZURE_CLIENT_ID || '00000000-0000-0000-0000-000000000000',
-    authority: import.meta.env.VITE_AZURE_AUTHORITY || 'https://login.microsoftonline.com/common',
+    authority: `https://login.microsoftonline.com/${import.meta.env.VITE_AZURE_TENANT_ID || 'common'}`,
     redirectUri: import.meta.env.VITE_REDIRECT_URI || window.location.origin,
   },
   cache: {
