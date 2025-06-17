@@ -157,29 +157,43 @@ export default function Dashboard() {
           </div>
         </header>
 
-        <div className="p-6">
+        <div className="p-6 space-y-6">
           {/* Metrics Overview */}
           {metrics && <MetricsOverview metrics={metrics} />}
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-            {/* Email Volume Chart */}
-            {volumeData && <EmailVolumeChart data={volumeData} />}
+          {/* Email Analytics Section */}
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            {/* Email Volume Chart - Takes 2 columns */}
+            <div className="xl:col-span-2">
+              {volumeData && <EmailVolumeChart data={volumeData} />}
+            </div>
             
-            {/* Sentiment Analysis */}
-            {sentimentData && <SentimentAnalysis data={sentimentData} />}
+            {/* Sentiment Analysis - Takes 1 column */}
+            <div className="xl:col-span-1">
+              {sentimentData && <SentimentAnalysis data={sentimentData} />}
+            </div>
           </div>
 
-          {/* Recent Emails */}
-          {recentEmails && <RecentEmails emails={recentEmails} />}
+          {/* Recent Activity Section */}
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            {/* Recent Emails - Takes 2 columns */}
+            <div className="xl:col-span-2">
+              {recentEmails && <RecentEmails emails={recentEmails} />}
+            </div>
+            
+            {/* Task Management - Takes 1 column */}
+            <div className="xl:col-span-1">
+              {recentTasks && (
+                <TaskManagement 
+                  tasks={recentTasks} 
+                  onTaskUpdate={handleTaskUpdate}
+                />
+              )}
+            </div>
+          </div>
 
-          {/* Task Management & Team Performance */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {recentTasks && (
-              <TaskManagement 
-                tasks={recentTasks} 
-                onTaskUpdate={handleTaskUpdate}
-              />
-            )}
+          {/* Team Performance Section */}
+          <div className="w-full">
             {teamMembers && <TeamPerformance teamMembers={teamMembers} />}
           </div>
         </div>
