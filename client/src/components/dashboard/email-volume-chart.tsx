@@ -3,22 +3,48 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { EmailVolumeData } from '@/lib/types';
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { AuthManager } from '@/lib/auth';
 
 interface EmailVolumeChartProps {
   data: EmailVolumeData[];
 }
 
-export function EmailVolumeChart({ data }: EmailVolumeChartProps) {
+export function EmailVolumeChart({ data: initialData }: EmailVolumeChartProps) {
   const [period, setPeriod] = useState('7');
+
+  const { data: volumeData } = useQuery<EmailVolumeData[]>({
+    queryKey: ['/api/dashboard/email-volume', period],
+    queryFn: async () => {
+      const response = await fetch(`/api/dashboard/email-volume?days=${period}`, {
+        headers: {
+          ...AuthManager.getAuthHeaders(),
+        },
+      });
+      if (!response.ok) throw new Error('Failed to fetch volume data');
+      return response.json();
+    },
+  });
+
+  const data = volumeData || initialData;
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
-    return date.toLocaleDateString('en-US', { weekday: 'short' });
+    const days = parseInt(period);
+    
+    if (days <= 7) {
+      return date.toLocaleDateString('en-US', { weekday: 'short' });
+    } else if (days <= 30) {
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    } else {
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
   };
 
   const chartData = data.map(item => ({
     ...item,
-    day: formatDate(item.date)
+    day: formatDate(item.date),
+    count: parseInt(item.count.toString())
   }));
 
   return (
