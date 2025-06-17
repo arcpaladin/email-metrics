@@ -1,3 +1,5 @@
+import { msalInstance, loginRequest } from './msal-config';
+import { AuthenticationResult } from '@azure/msal-browser';
 import { AuthUser } from './types';
 
 const TOKEN_KEY = 'auth_token';
@@ -25,6 +27,7 @@ export class AuthManager {
   static logout() {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
+    msalInstance.logoutRedirect().catch(console.error);
   }
 
   static getAuthHeaders() {
@@ -33,17 +36,56 @@ export class AuthManager {
   }
 }
 
-// Microsoft Graph SDK mock for authentication
-export class MockMSAL {
+export class MSALService {
   static async signIn(): Promise<{ accessToken: string }> {
-    // In a real implementation, this would use @azure/msal-browser
-    // For demo purposes, we'll simulate the OAuth flow
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        resolve({
-          accessToken: 'mock_access_token_' + Math.random().toString(36).substr(2, 9)
-        });
-      }, 1000);
-    });
+    try {
+      // Check if user is already signed in
+      const accounts = msalInstance.getAllAccounts();
+      
+      let authResult: AuthenticationResult;
+      
+      if (accounts.length > 0) {
+        // User is already signed in, try to get token silently
+        try {
+          authResult = await msalInstance.acquireTokenSilent({
+            ...loginRequest,
+            account: accounts[0],
+          });
+        } catch (error) {
+          // Silent token acquisition failed, fall back to interactive
+          await msalInstance.acquireTokenRedirect(loginRequest);
+          throw new Error('Redirect initiated'); // This will be handled by redirect
+        }
+      } else {
+        // No user signed in, initiate login
+        await msalInstance.loginRedirect(loginRequest);
+        throw new Error('Redirect initiated'); // This will be handled by redirect
+      }
+
+      return {
+        accessToken: authResult.accessToken
+      };
+    } catch (error: any) {
+      if (error.message === 'Redirect initiated') {
+        throw error;
+      }
+      console.error('Authentication error:', error);
+      throw new Error('Authentication failed');
+    }
+  }
+
+  static async handleRedirectPromise(): Promise<{ accessToken: string } | null> {
+    try {
+      const response = await msalInstance.handleRedirectPromise();
+      if (response) {
+        return {
+          accessToken: response.accessToken
+        };
+      }
+      return null;
+    } catch (error) {
+      console.error('Redirect handling error:', error);
+      throw error;
+    }
   }
 }

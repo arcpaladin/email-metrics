@@ -3,7 +3,7 @@ import { useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { AuthManager, MockMSAL } from '@/lib/auth';
+import { AuthManager, MSALService } from '@/lib/auth';
 import { apiRequest } from '@/lib/queryClient';
 
 export default function Login() {
@@ -15,7 +15,7 @@ export default function Login() {
     setIsLoading(true);
     try {
       // Get access token from Microsoft
-      const msalResult = await MockMSAL.signIn();
+      const msalResult = await MSALService.signIn();
       
       // Authenticate with our backend
       const response = await apiRequest('POST', '/api/auth/microsoft', {
