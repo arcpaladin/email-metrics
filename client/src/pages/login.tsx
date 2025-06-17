@@ -40,6 +40,8 @@ export default function Login() {
       
       if (error.message?.includes('AADSTS50194')) {
         errorMessage = "Your Azure AD application needs to be configured as multi-tenant or you need to provide your tenant ID. Please check your Azure AD app registration settings.";
+      } else if (error.message?.includes('access_denied')) {
+        errorMessage = "Access denied. The application may need admin consent for the requested permissions. Please contact your administrator or try with reduced permissions.";
       } else if (error.message?.includes('AADSTS')) {
         errorMessage = "Azure AD authentication error. Please check your application configuration and permissions.";
       }
