@@ -40,10 +40,10 @@ Enterprise-level email analytics dashboard with AI-powered task extraction using
 
 1. Copy environment file:
 ```bash
-cp .env.example .env
+cp .env.example .env.local
 ```
 
-2. Configure your environment variables in `.env`:
+2. Configure your environment variables in `.env.local`:
 ```env
 # Database
 DATABASE_URL=postgresql://postgres:password@localhost:5432/emailanalytics
@@ -80,62 +80,79 @@ The application will be available at `http://localhost:5000`
 
 ## AWS Deployment
 
-### Quick Deployment
+### Automated Deployment
 
-Use the automated deployment script:
+Use the deployment script for complete AWS setup:
+
 ```bash
-npm run deploy:aws
+chmod +x deploy-aws.sh
+./deploy-aws.sh
 ```
 
-### Manual Deployment Steps
+The script provides multiple deployment options:
+1. **Full deployment** (Database + Backend + Frontend)
+2. **Database only**
+3. **Backend only** 
+4. **Frontend only**
+5. **Cleanup existing resources**
 
-1. **Database Setup (RDS PostgreSQL)**:
-```bash
-aws rds create-db-instance \
-  --db-instance-identifier email-analytics-db \
-  --db-instance-class db.t3.micro \
-  --engine postgres \
-  --allocated-storage 20 \
-  --db-name emailanalytics \
-  --master-username dbadmin \
-  --master-user-password YOUR_PASSWORD
+### Deployment Features
+
+- **Database**: Automatic RDS PostgreSQL setup with latest version detection
+- **Backend**: App Runner service with ECR container registry
+- **Frontend**: Amplify deployment guidance with GitHub integration
+- **Security**: IAM roles and policies automatically configured
+- **Error Handling**: Existing resource detection and graceful updates
+
+### Alternative Deployment Methods
+
+If Docker isn't available, the script offers:
+- **GitHub Actions**: Automated CI/CD pipeline generation
+- **Source Code Deployment**: Direct code deployment to App Runner
+- **Manual Setup**: Step-by-step AWS console guidance
+
+### Environment Variables Setup
+
+After deployment, configure these variables:
+
+#### App Runner Backend
+Set in AWS App Runner Console:
+```env
+NODE_ENV=production
+PORT=5000
+DATABASE_URL=postgresql://dbadmin:PASSWORD@endpoint:5432/emailanalytics
+OPENAI_API_KEY=your-openai-api-key
+VITE_AZURE_CLIENT_ID=your-azure-client-id
+VITE_AZURE_TENANT_ID=your-azure-tenant-id
+JWT_SECRET=your-jwt-secret-key
 ```
 
-2. **Backend Deployment (App Runner)**:
-```bash
-# Build and push Docker image
-docker build -t email-analytics .
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin YOUR_ACCOUNT.dkr.ecr.us-east-1.amazonaws.com
-docker tag email-analytics:latest YOUR_ACCOUNT.dkr.ecr.us-east-1.amazonaws.com/email-analytics:latest
-docker push YOUR_ACCOUNT.dkr.ecr.us-east-1.amazonaws.com/email-analytics:latest
-
-# Create App Runner service
-aws apprunner create-service --cli-input-json file://apprunner-config.json
+#### Amplify Frontend
+Set in AWS Amplify Console:
+```env
+VITE_AZURE_CLIENT_ID=your-azure-client-id
+VITE_AZURE_TENANT_ID=your-azure-tenant-id
 ```
 
-3. **Frontend Deployment (Amplify)**:
-- Connect GitHub repository to AWS Amplify
-- Use provided `amplify.yml` configuration
-- Set environment variables for Azure credentials
+### Post-Deployment Steps
 
-### Environment Variables for Production
+1. **Configure environment variables** in AWS consoles
+2. **Update Azure AD redirect URIs** with your new domains
+3. **Test backend endpoints** at your App Runner URL
+4. **Deploy frontend** via Amplify console
+5. **Monitor logs** using CloudWatch
 
-Set these in AWS App Runner:
-- `DATABASE_URL`: RDS PostgreSQL connection string
-- `OPENAI_API_KEY`: Your OpenAI API key
-- `VITE_AZURE_CLIENT_ID`: Azure AD application ID
-- `VITE_AZURE_TENANT_ID`: Azure AD tenant ID
-- `JWT_SECRET`: Strong random secret for JWT signing
-- `NODE_ENV=production`
+## Microsoft Graph API Setup
 
-## Docker Development
-
-Run with Docker Compose:
-```bash
-docker-compose up -d
-```
-
-This starts PostgreSQL and the application in containers.
+1. Create Azure AD application at https://portal.azure.com
+2. Add API permissions:
+   - `User.Read`
+   - `Mail.Read`
+   - `Mail.ReadWrite`
+   - `Directory.Read.All`
+   - `User.ReadBasic.All`
+3. Configure redirect URIs for your domains
+4. Copy Application (client) ID and Tenant ID to environment variables
 
 ## API Endpoints
 
@@ -156,18 +173,6 @@ This starts PostgreSQL and the application in containers.
 - `GET /api/tasks/recent` - Recent tasks
 - `PUT /api/tasks/:id/status` - Update task status
 
-## Microsoft Graph API Setup
-
-1. Create Azure AD application at https://portal.azure.com
-2. Add these API permissions:
-   - `User.Read`
-   - `Mail.Read`
-   - `Mail.ReadWrite`
-   - `Directory.Read.All`
-   - `User.ReadBasic.All`
-3. Configure redirect URIs for your domains
-4. Copy Application (client) ID and Tenant ID to environment variables
-
 ## Security Features
 
 - JWT-based authentication
@@ -175,38 +180,24 @@ This starts PostgreSQL and the application in containers.
 - Environment variable protection
 - Database connection encryption
 - CORS configuration
-- Rate limiting (production)
+- Automatic IAM role management
 
-## Monitoring
+## Monitoring and Troubleshooting
 
-### Local Development
-- Console logging
-- Error handling with stack traces
+### Check Deployment Status
+```bash
+./check-deployment-status.sh
+```
 
-### Production (AWS)
-- CloudWatch Logs integration
-- Application performance monitoring
-- Health check endpoints
-- Error tracking and alerting
+### View Application Logs
+```bash
+aws logs tail /aws/apprunner/email-analytics-backend/application --region us-east-2 --follow
+```
 
-## Contributing
-
-1. Fork the repository
-2. Create feature branch: `git checkout -b feature/new-feature`
-3. Commit changes: `git commit -am 'Add new feature'`
-4. Push to branch: `git push origin feature/new-feature`
-5. Submit pull request
-
-## License
-
-This project is licensed under the MIT License.
-
-## Support
-
-For issues and questions:
-1. Check existing GitHub issues
-2. Create new issue with detailed description
-3. Include environment details and error logs
+### Common Issues
+- **Docker not running**: Use GitHub Actions deployment option
+- **Permission errors**: Run IAM policy setup from deployment script
+- **Service not ready**: Wait for App Runner service to reach RUNNING state
 
 ## Cost Estimation (AWS)
 
@@ -215,5 +206,17 @@ For issues and questions:
 | RDS PostgreSQL (db.t3.micro) | $15-20 |
 | App Runner (0.25 vCPU, 0.5 GB) | $10-15 |
 | Amplify (Standard tier) | $5-10 |
-| CloudFront | $1-2 |
+| ECR Storage | $1-2 |
 | **Total** | **$31-47** |
+
+## Support
+
+For deployment issues:
+1. Check deployment script output and logs
+2. Verify AWS credentials and permissions
+3. Monitor service status in AWS consoles
+4. Review environment variable configuration
+
+## License
+
+This project is licensed under the MIT License.
