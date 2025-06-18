@@ -9,7 +9,7 @@ echo "🚀 Starting AWS deployment..."
 
 # Configuration
 APP_NAME="email-analytics"
-REGION="us-east-1"
+REGION="us-east-2"
 DB_INSTANCE_CLASS="db.t3.micro"
 DB_ALLOCATED_STORAGE="20"
 
