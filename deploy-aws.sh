@@ -425,16 +425,40 @@ EOF
 deploy_frontend() {
     echo -e "${YELLOW}Setting up Amplify for frontend deployment...${NC}"
     
-    # Create Amplify app
-    aws amplify create-app \
-        --name "${APP_NAME}-frontend" \
-        --description "Email Analytics Dashboard Frontend" \
-        --repository "https://github.com/YOUR_USERNAME/YOUR_REPO" \
-        --platform WEB \
-        --region $REGION
+    # Check if git repository is connected to GitHub
+    GIT_REMOTE=$(git remote get-url origin 2>/dev/null || echo "")
     
-    echo -e "${GREEN}✓ Amplify app created${NC}"
-    echo -e "${YELLOW}Please connect your GitHub repository in the AWS Amplify console${NC}"
+    if [ -z "$GIT_REMOTE" ]; then
+        echo -e "${YELLOW}No git remote found. Manual setup required:${NC}"
+        echo ""
+        echo "Steps to deploy frontend:"
+        echo "1. Push your code to GitHub:"
+        echo "   git init"
+        echo "   git add ."
+        echo "   git commit -m 'Deploy to AWS'"
+        echo "   git remote add origin YOUR_GITHUB_REPO_URL"
+        echo "   git push -u origin main"
+        echo ""
+        echo "2. Go to AWS Amplify Console"
+        echo "3. Click 'New app' > 'Host web app'"
+        echo "4. Connect your GitHub repository"
+        echo "5. Use build settings from amplify.yml"
+        return 0
+    fi
+    
+    echo "Found git repository: $GIT_REMOTE"
+    echo -e "${YELLOW}Manual Amplify setup required (GitHub token needed for automation):${NC}"
+    echo ""
+    echo "1. Go to AWS Amplify Console: https://console.aws.amazon.com/amplify/"
+    echo "2. Click 'New app' > 'Host web app'"
+    echo "3. Select GitHub and authorize AWS Amplify"
+    echo "4. Choose repository: $GIT_REMOTE"
+    echo "5. Build settings will use amplify.yml automatically"
+    echo "6. Set environment variables in Amplify console:"
+    echo "   - VITE_AZURE_CLIENT_ID"
+    echo "   - VITE_AZURE_TENANT_ID"
+    echo ""
+    echo -e "${GREEN}✓ Frontend setup guidance provided${NC}"
 }
 
 # Function to setup environment variables
