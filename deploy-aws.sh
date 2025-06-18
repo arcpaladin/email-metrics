@@ -35,45 +35,80 @@ echo -e "${GREEN}✓ AWS CLI configured${NC}"
 
 # Function to create RDS instance
 create_database() {
-    echo -e "${YELLOW}Creating RDS PostgreSQL instance...${NC}"
+    echo -e "${YELLOW}Setting up RDS PostgreSQL instance...${NC}"
     
-    # Get the latest PostgreSQL 15.x version available
-    POSTGRES_VERSION=$(aws rds describe-db-engine-versions \
-        --engine postgres \
-        --query 'DBEngineVersions[?starts_with(EngineVersion, `15.`)].EngineVersion' \
-        --output text \
-        --region $REGION | tr '\t' '\n' | sort -V | tail -1)
-    
-    if [ -z "$POSTGRES_VERSION" ]; then
-        POSTGRES_VERSION="15.5"  # Fallback to known working version
+    # Check if database instance already exists
+    if aws rds describe-db-instances --db-instance-identifier "${APP_NAME}-db" --region $REGION &>/dev/null; then
+        echo -e "${YELLOW}Database instance ${APP_NAME}-db already exists.${NC}"
+        
+        # Get current database status
+        DB_STATUS=$(aws rds describe-db-instances \
+            --db-instance-identifier "${APP_NAME}-db" \
+            --query 'DBInstances[0].DBInstanceStatus' \
+            --output text \
+            --region $REGION)
+        
+        echo "Database status: $DB_STATUS"
+        
+        if [ "$DB_STATUS" = "available" ]; then
+            echo -e "${GREEN}✓ Using existing database instance${NC}"
+            
+            # Get database endpoint
+            DB_ENDPOINT=$(aws rds describe-db-instances \
+                --db-instance-identifier "${APP_NAME}-db" \
+                --query 'DBInstances[0].Endpoint.Address' \
+                --output text \
+                --region $REGION)
+            
+            echo -e "${GREEN}✓ Database is ready at: $DB_ENDPOINT${NC}"
+            echo -e "${YELLOW}Note: You'll need the master password from the previous deployment${NC}"
+            return 0
+        else
+            echo "Waiting for existing database to become available..."
+            aws rds wait db-instance-available --db-instance-identifier "${APP_NAME}-db" --region $REGION
+        fi
+    else
+        # Create new database instance
+        echo "Creating new RDS PostgreSQL instance..."
+        
+        # Get the latest PostgreSQL 15.x version available
+        POSTGRES_VERSION=$(aws rds describe-db-engine-versions \
+            --engine postgres \
+            --query 'DBEngineVersions[?starts_with(EngineVersion, `15.`)].EngineVersion' \
+            --output text \
+            --region $REGION | tr '\t' '\n' | sort -V | tail -1)
+        
+        if [ -z "$POSTGRES_VERSION" ]; then
+            POSTGRES_VERSION="15.5"  # Fallback to known working version
+        fi
+        
+        echo "Using PostgreSQL version: $POSTGRES_VERSION"
+        
+        DB_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+        
+        aws rds create-db-instance \
+            --db-instance-identifier "${APP_NAME}-db" \
+            --db-instance-class $DB_INSTANCE_CLASS \
+            --engine postgres \
+            --engine-version $POSTGRES_VERSION \
+            --allocated-storage $DB_ALLOCATED_STORAGE \
+            --storage-type gp2 \
+            --db-name emailanalytics \
+            --master-username dbadmin \
+            --master-user-password "$DB_PASSWORD" \
+            --backup-retention-period 7 \
+            --storage-encrypted \
+            --publicly-accessible \
+            --region $REGION
+        
+        echo -e "${GREEN}✓ RDS instance creation initiated${NC}"
+        echo -e "${YELLOW}Database password: $DB_PASSWORD${NC}"
+        echo -e "${YELLOW}Save this password securely!${NC}"
+        
+        # Wait for database to be available
+        echo "Waiting for database to be available..."
+        aws rds wait db-instance-available --db-instance-identifier "${APP_NAME}-db" --region $REGION
     fi
-    
-    echo "Using PostgreSQL version: $POSTGRES_VERSION"
-    
-    DB_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
-    
-    aws rds create-db-instance \
-        --db-instance-identifier "${APP_NAME}-db" \
-        --db-instance-class $DB_INSTANCE_CLASS \
-        --engine postgres \
-        --engine-version $POSTGRES_VERSION \
-        --allocated-storage $DB_ALLOCATED_STORAGE \
-        --storage-type gp2 \
-        --db-name emailanalytics \
-        --master-username dbadmin \
-        --master-user-password "$DB_PASSWORD" \
-        --backup-retention-period 7 \
-        --storage-encrypted \
-        --publicly-accessible \
-        --region $REGION
-    
-    echo -e "${GREEN}✓ RDS instance creation initiated${NC}"
-    echo -e "${YELLOW}Database password: $DB_PASSWORD${NC}"
-    echo -e "${YELLOW}Save this password securely!${NC}"
-    
-    # Wait for database to be available
-    echo "Waiting for database to be available..."
-    aws rds wait db-instance-available --db-instance-identifier "${APP_NAME}-db" --region $REGION
     
     # Get database endpoint
     DB_ENDPOINT=$(aws rds describe-db-instances \
@@ -174,17 +209,65 @@ For Amplify (Frontend):
 EOF
 }
 
+# Function to cleanup existing resources
+cleanup_resources() {
+    echo -e "${YELLOW}Cleaning up existing AWS resources...${NC}"
+    
+    echo "What would you like to clean up?"
+    echo "1) Database only"
+    echo "2) Backend (App Runner) only"
+    echo "3) Both database and backend"
+    echo "4) Cancel cleanup"
+    read -p "Enter your choice (1-4): " cleanup_choice
+    
+    case $cleanup_choice in
+        1|3)
+            echo -e "${RED}⚠️  This will permanently delete your database and all data!${NC}"
+            read -p "Type 'DELETE' to confirm: " confirm
+            if [ "$confirm" = "DELETE" ]; then
+                aws rds delete-db-instance \
+                    --db-instance-identifier "${APP_NAME}-db" \
+                    --skip-final-snapshot \
+                    --region $REGION
+                echo -e "${GREEN}✓ Database deletion initiated${NC}"
+            else
+                echo "Database cleanup cancelled"
+            fi
+            ;;
+    esac
+    
+    case $cleanup_choice in
+        2|3)
+            # Get App Runner service ARN
+            SERVICE_ARN=$(aws apprunner list-services \
+                --region $REGION \
+                --query "ServiceSummaryList[?ServiceName=='${APP_NAME}-backend'].ServiceArn" \
+                --output text)
+            
+            if [ -n "$SERVICE_ARN" ]; then
+                aws apprunner delete-service \
+                    --service-arn "$SERVICE_ARN" \
+                    --region $REGION
+                echo -e "${GREEN}✓ App Runner service deletion initiated${NC}"
+            else
+                echo "No App Runner service found to delete"
+            fi
+            ;;
+    esac
+}
+
 # Main deployment flow
 main() {
     echo -e "${GREEN}Starting deployment of $APP_NAME to AWS${NC}"
     
     # Ask user what to deploy
-    echo "What would you like to deploy?"
+    echo "What would you like to do?"
     echo "1) Full deployment (Database + Backend + Frontend)"
     echo "2) Database only"
     echo "3) Backend only"
     echo "4) Frontend only"
-    read -p "Enter your choice (1-4): " choice
+    echo "5) Cleanup existing resources"
+    read -p "Enter your choice (1-5): " choice
     
     case $choice in
         1)
@@ -201,6 +284,9 @@ main() {
             ;;
         4)
             deploy_frontend
+            ;;
+        5)
+            cleanup_resources
             ;;
         *)
             echo -e "${RED}Invalid choice${NC}"
