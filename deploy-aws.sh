@@ -120,6 +120,100 @@ create_database() {
     echo -e "${GREEN}✓ Database is ready at: $DB_ENDPOINT${NC}"
 }
 
+# Function to deploy with GitHub Actions
+deploy_with_github_actions() {
+    echo -e "${YELLOW}Setting up GitHub Actions deployment...${NC}"
+    
+    mkdir -p .github/workflows
+    
+    cat > .github/workflows/deploy.yml << 'EOF'
+name: Deploy to AWS
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+    
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+    
+    - name: Build, tag, and push image to Amazon ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: email-analytics-backend
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+    
+    - name: Deploy to App Runner
+      run: |
+        SERVICE_ARN=$(aws apprunner list-services --query "ServiceSummaryList[?ServiceName=='email-analytics-backend'].ServiceArn" --output text)
+        if [ -n "$SERVICE_ARN" ]; then
+          aws apprunner start-deployment --service-arn $SERVICE_ARN
+        fi
+EOF
+    
+    echo -e "${GREEN}✓ GitHub Actions workflow created${NC}"
+    echo -e "${YELLOW}Next steps:${NC}"
+    echo "1. Push this repository to GitHub"
+    echo "2. Add AWS credentials to GitHub Secrets:"
+    echo "   - AWS_ACCESS_KEY_ID"
+    echo "   - AWS_SECRET_ACCESS_KEY"
+    echo "3. Push to main branch to trigger deployment"
+}
+
+# Function to deploy with source code
+deploy_with_source_code() {
+    echo -e "${YELLOW}Deploying with source code...${NC}"
+    
+    # Create apprunner.yaml configuration
+    cat > apprunner.yaml << 'EOF'
+version: 1.0
+runtime: nodejs18
+build:
+  commands:
+    build:
+      - echo "Installing dependencies..."
+      - npm install
+      - echo "Building application..."
+      - npm run build
+run:
+  runtime-version: 18
+  command: npm start
+  network:
+    port: 5000
+    env: PORT
+  env:
+    - name: NODE_ENV
+      value: production
+EOF
+    
+    echo -e "${GREEN}✓ App Runner configuration created${NC}"
+    echo -e "${YELLOW}Manual steps required:${NC}"
+    echo "1. Create a GitHub repository for this project"
+    echo "2. Push the code to GitHub"
+    echo "3. In AWS Console, create App Runner service from GitHub source"
+    echo "4. Connect to your repository and use the apprunner.yaml file"
+}
+
 # Function to deploy backend to App Runner
 deploy_backend() {
     echo -e "${YELLOW}Deploying backend to AWS App Runner...${NC}"
@@ -127,13 +221,43 @@ deploy_backend() {
     # Check if Docker is running
     if ! docker info >/dev/null 2>&1; then
         echo -e "${RED}Docker daemon is not running!${NC}"
-        echo -e "${YELLOW}Please start Docker Desktop or Docker daemon first:${NC}"
-        echo "- On macOS: Open Docker Desktop application"
-        echo "- On Linux: sudo systemctl start docker"
-        echo "- On Windows: Start Docker Desktop"
-        echo ""
-        echo "After starting Docker, run this script again."
-        return 1
+        echo -e "${YELLOW}Choose an alternative deployment method:${NC}"
+        echo "1) Start Docker and continue with container deployment"
+        echo "2) Use GitHub Actions for automated deployment"
+        echo "3) Use direct source code deployment"
+        echo "4) Exit and start Docker manually"
+        read -p "Enter your choice (1-4): " docker_choice
+        
+        case $docker_choice in
+            1)
+                echo -e "${YELLOW}Please start Docker first:${NC}"
+                echo "- On macOS: Open Docker Desktop application"
+                echo "- On Linux: sudo systemctl start docker"
+                echo "- On Windows: Start Docker Desktop"
+                echo ""
+                read -p "Press Enter after starting Docker..."
+                if ! docker info >/dev/null 2>&1; then
+                    echo -e "${RED}Docker still not running. Exiting.${NC}"
+                    return 1
+                fi
+                ;;
+            2)
+                deploy_with_github_actions
+                return 0
+                ;;
+            3)
+                deploy_with_source_code
+                return 0
+                ;;
+            4)
+                echo "Please start Docker and run this script again."
+                return 1
+                ;;
+            *)
+                echo -e "${RED}Invalid choice${NC}"
+                return 1
+                ;;
+        esac
     fi
     
     # Create ECR repository (handle existing repository)
