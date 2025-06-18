@@ -120,6 +120,47 @@ create_database() {
     echo -e "${GREEN}✓ Database is ready at: $DB_ENDPOINT${NC}"
 }
 
+# Function to wait for App Runner service to be ready
+wait_for_service_ready() {
+    local service_arn=$1
+    local max_wait=600  # 10 minutes
+    local wait_time=0
+    
+    echo "Waiting for App Runner service to be ready..."
+    
+    while [ $wait_time -lt $max_wait ]; do
+        SERVICE_STATUS=$(aws apprunner describe-service \
+            --service-arn "$service_arn" \
+            --region $REGION \
+            --query 'Service.Status' \
+            --output text 2>/dev/null)
+        
+        case $SERVICE_STATUS in
+            "RUNNING")
+                echo -e "${GREEN}✓ Service is running${NC}"
+                return 0
+                ;;
+            "CREATE_FAILED"|"DELETE_FAILED"|"UPDATE_FAILED_ROLLBACK_COMPLETE")
+                echo -e "${RED}Service failed: $SERVICE_STATUS${NC}"
+                return 1
+                ;;
+            "OPERATION_IN_PROGRESS"|"CREATING"|"UPDATING")
+                echo "Service status: $SERVICE_STATUS (waiting...)"
+                sleep 30
+                wait_time=$((wait_time + 30))
+                ;;
+            *)
+                echo "Unknown status: $SERVICE_STATUS"
+                sleep 15
+                wait_time=$((wait_time + 15))
+                ;;
+        esac
+    done
+    
+    echo -e "${YELLOW}Timeout waiting for service. Check AWS Console for status.${NC}"
+    return 1
+}
+
 # Function to deploy with GitHub Actions
 deploy_with_github_actions() {
     echo -e "${YELLOW}Setting up GitHub Actions deployment...${NC}"
@@ -290,20 +331,36 @@ deploy_backend() {
     
     # Check if App Runner service already exists
     if aws apprunner list-services --region $REGION --query "ServiceSummaryList[?ServiceName=='${APP_NAME}-backend']" --output text | grep -q "${APP_NAME}-backend"; then
-        echo -e "${YELLOW}App Runner service already exists. Updating...${NC}"
+        echo -e "${YELLOW}App Runner service already exists. Checking status...${NC}"
         
-        # Get service ARN
+        # Get service ARN and status
         SERVICE_ARN=$(aws apprunner list-services \
             --region $REGION \
             --query "ServiceSummaryList[?ServiceName=='${APP_NAME}-backend'].ServiceArn" \
             --output text)
         
-        # Update the service with new image
-        aws apprunner start-deployment \
+        SERVICE_STATUS=$(aws apprunner describe-service \
             --service-arn "$SERVICE_ARN" \
-            --region $REGION
+            --region $REGION \
+            --query 'Service.Status' \
+            --output text)
         
-        echo -e "${GREEN}✓ App Runner service update initiated${NC}"
+        echo "Current service status: $SERVICE_STATUS"
+        
+        if [ "$SERVICE_STATUS" = "RUNNING" ]; then
+            echo "Starting deployment update..."
+            aws apprunner start-deployment \
+                --service-arn "$SERVICE_ARN" \
+                --region $REGION
+            echo -e "${GREEN}✓ App Runner service update initiated${NC}"
+        elif [ "$SERVICE_STATUS" = "CREATE_FAILED" ] || [ "$SERVICE_STATUS" = "OPERATION_IN_PROGRESS" ]; then
+            echo -e "${YELLOW}Service is in $SERVICE_STATUS state. Waiting for completion...${NC}"
+            echo "You can check the service status in AWS Console or run this script again later."
+        else
+            echo -e "${YELLOW}Service is in $SERVICE_STATUS state. Waiting for it to become available...${NC}"
+            echo "This may take a few minutes. The service will be ready shortly."
+        fi
+        
         return 0
     fi
     
