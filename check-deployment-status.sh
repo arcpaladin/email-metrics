@@ -4,6 +4,42 @@
 APP_NAME="email-analytics"
 REGION="us-east-2"
 
+# Function to check specific service by ARN
+check_service_by_arn() {
+    local service_arn=$1
+    echo "Checking service: $service_arn"
+    
+    SERVICE_INFO=$(aws apprunner describe-service \
+        --service-arn "$service_arn" \
+        --region $REGION \
+        --output json 2>/dev/null)
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Failed to get service information for ARN: $service_arn${NC}"
+        return 1
+    fi
+    
+    # Extract status and details
+    STATUS=$(echo "$SERVICE_INFO" | jq -r '.Service.Status')
+    SERVICE_URL=$(echo "$SERVICE_INFO" | jq -r '.Service.ServiceUrl // "Not available"')
+    CREATED_AT=$(echo "$SERVICE_INFO" | jq -r '.Service.CreatedAt')
+    UPDATED_AT=$(echo "$SERVICE_INFO" | jq -r '.Service.UpdatedAt')
+    
+    echo "Status: $STATUS"
+    echo "URL: $SERVICE_URL"
+    echo "Created: $CREATED_AT"
+    echo "Updated: $UPDATED_AT"
+    
+    return 0
+}
+
+# Check if specific ARN provided as argument
+if [ "$1" != "" ]; then
+    echo "Checking specific service ARN: $1"
+    check_service_by_arn "$1"
+    exit 0
+fi
+
 # Colors
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
