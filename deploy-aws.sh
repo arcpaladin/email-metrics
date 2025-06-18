@@ -307,6 +307,47 @@ deploy_backend() {
         return 0
     fi
     
+    # Create IAM role for App Runner
+    echo "Creating IAM role for App Runner..."
+    
+    # Create trust policy for App Runner
+    cat > apprunner-trust-policy.json << EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "build.apprunner.amazonaws.com"
+            },
+            "Action": "sts:AssumeRole"
+        }
+    ]
+}
+EOF
+    
+    # Create the IAM role
+    ROLE_NAME="${APP_NAME}-apprunner-role"
+    aws iam create-role \
+        --role-name "$ROLE_NAME" \
+        --assume-role-policy-document file://apprunner-trust-policy.json \
+        --region $REGION 2>/dev/null || echo "Role already exists"
+    
+    # Attach ECR access policy
+    aws iam attach-role-policy \
+        --role-name "$ROLE_NAME" \
+        --policy-arn "arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess" \
+        --region $REGION 2>/dev/null || echo "Policy already attached"
+    
+    # Wait for role to be available (IAM propagation delay)
+    echo "Waiting for IAM role propagation..."
+    sleep 10
+    
+    # Get the role ARN
+    ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text --region $REGION)
+    
+    echo "Using IAM role: $ROLE_ARN"
+    
     # Create App Runner service
     echo "Creating App Runner service..."
     cat > apprunner-config.json << EOF
@@ -314,7 +355,7 @@ deploy_backend() {
     "ServiceName": "${APP_NAME}-backend",
     "SourceConfiguration": {
         "ImageRepository": {
-            "ImageIdentifier": "$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$REGION.amazonaws.com/${APP_NAME}-backend:latest",
+            "ImageIdentifier": "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/${APP_NAME}-backend:latest",
             "ImageConfiguration": {
                 "Port": "5000",
                 "RuntimeEnvironmentVariables": {
@@ -323,6 +364,9 @@ deploy_backend() {
                 }
             },
             "ImageRepositoryType": "ECR"
+        },
+        "AuthenticationConfiguration": {
+            "AccessRoleArn": "$ROLE_ARN"
         },
         "AutoDeploymentsEnabled": false
     },
@@ -333,10 +377,48 @@ deploy_backend() {
 }
 EOF
     
-    aws apprunner create-service --cli-input-json file://apprunner-config.json --region $REGION
-    rm apprunner-config.json
+    # Clean up temporary files
+    rm -f apprunner-trust-policy.json
     
-    echo -e "${GREEN}✓ App Runner service created${NC}"
+    # Create App Runner service with error handling
+    if aws apprunner create-service --cli-input-json file://apprunner-config.json --region $REGION; then
+        echo -e "${GREEN}✓ App Runner service created successfully${NC}"
+        
+        # Wait for service to be running
+        echo "Waiting for App Runner service to start..."
+        SERVICE_ARN=$(aws apprunner list-services \
+            --region $REGION \
+            --query "ServiceSummaryList[?ServiceName=='${APP_NAME}-backend'].ServiceArn" \
+            --output text)
+        
+        # Get service URL
+        sleep 30
+        SERVICE_URL=$(aws apprunner describe-service \
+            --service-arn "$SERVICE_ARN" \
+            --region $REGION \
+            --query 'Service.ServiceUrl' \
+            --output text 2>/dev/null)
+        
+        if [ -n "$SERVICE_URL" ]; then
+            echo -e "${GREEN}✓ Backend deployed at: https://$SERVICE_URL${NC}"
+        else
+            echo -e "${YELLOW}Service created but URL not yet available. Check AWS Console.${NC}"
+        fi
+    else
+        echo -e "${RED}Failed to create App Runner service${NC}"
+        echo -e "${YELLOW}Check the following:${NC}"
+        echo "1. IAM permissions for App Runner and ECR"
+        echo "2. ECR image exists and is accessible"
+        echo "3. AWS region is correct"
+        echo ""
+        echo "You can also create the service manually in AWS Console:"
+        echo "- Go to AWS App Runner"
+        echo "- Create service from ECR"
+        echo "- Use image: $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/${APP_NAME}-backend:latest"
+        echo "- Set port to 5000"
+    fi
+    
+    rm -f apprunner-config.json
 }
 
 # Function to deploy frontend to Amplify
@@ -421,6 +503,19 @@ cleanup_resources() {
             else
                 echo "No App Runner service found to delete"
             fi
+            
+            # Clean up IAM role
+            ROLE_NAME="${APP_NAME}-apprunner-role"
+            aws iam detach-role-policy \
+                --role-name "$ROLE_NAME" \
+                --policy-arn "arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess" \
+                --region $REGION 2>/dev/null || echo "Policy not attached"
+            
+            aws iam delete-role \
+                --role-name "$ROLE_NAME" \
+                --region $REGION 2>/dev/null || echo "Role not found"
+            
+            echo -e "${GREEN}✓ IAM role cleanup completed${NC}"
             ;;
     esac
 }
