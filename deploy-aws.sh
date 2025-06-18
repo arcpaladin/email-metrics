@@ -37,13 +37,26 @@ echo -e "${GREEN}✓ AWS CLI configured${NC}"
 create_database() {
     echo -e "${YELLOW}Creating RDS PostgreSQL instance...${NC}"
     
+    # Get the latest PostgreSQL 15.x version available
+    POSTGRES_VERSION=$(aws rds describe-db-engine-versions \
+        --engine postgres \
+        --query 'DBEngineVersions[?starts_with(EngineVersion, `15.`)].EngineVersion' \
+        --output text \
+        --region $REGION | tr '\t' '\n' | sort -V | tail -1)
+    
+    if [ -z "$POSTGRES_VERSION" ]; then
+        POSTGRES_VERSION="15.5"  # Fallback to known working version
+    fi
+    
+    echo "Using PostgreSQL version: $POSTGRES_VERSION"
+    
     DB_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
     
     aws rds create-db-instance \
         --db-instance-identifier "${APP_NAME}-db" \
         --db-instance-class $DB_INSTANCE_CLASS \
         --engine postgres \
-        --engine-version 15.4 \
+        --engine-version $POSTGRES_VERSION \
         --allocated-storage $DB_ALLOCATED_STORAGE \
         --storage-type gp2 \
         --db-name emailanalytics \
