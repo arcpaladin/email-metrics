@@ -124,22 +124,67 @@ create_database() {
 deploy_backend() {
     echo -e "${YELLOW}Deploying backend to AWS App Runner...${NC}"
     
-    # Create ECR repository
-    aws ecr create-repository \
-        --repository-name "${APP_NAME}-backend" \
-        --region $REGION || true
+    # Check if Docker is running
+    if ! docker info >/dev/null 2>&1; then
+        echo -e "${RED}Docker daemon is not running!${NC}"
+        echo -e "${YELLOW}Please start Docker Desktop or Docker daemon first:${NC}"
+        echo "- On macOS: Open Docker Desktop application"
+        echo "- On Linux: sudo systemctl start docker"
+        echo "- On Windows: Start Docker Desktop"
+        echo ""
+        echo "After starting Docker, run this script again."
+        return 1
+    fi
+    
+    # Create ECR repository (handle existing repository)
+    if aws ecr describe-repositories --repository-names "${APP_NAME}-backend" --region $REGION >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ ECR repository already exists${NC}"
+    else
+        echo "Creating ECR repository..."
+        aws ecr create-repository \
+            --repository-name "${APP_NAME}-backend" \
+            --region $REGION
+        echo -e "${GREEN}✓ ECR repository created${NC}"
+    fi
+    
+    # Get AWS account ID
+    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
     
     # Get ECR login
-    aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $(aws sts get-caller-identity --query Account --output text).dkr.ecr.$REGION.amazonaws.com
+    echo "Logging into ECR..."
+    aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com
     
     # Build and push Docker image
+    echo "Building Docker image..."
     docker build -t "${APP_NAME}-backend" .
-    docker tag "${APP_NAME}-backend:latest" "$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$REGION.amazonaws.com/${APP_NAME}-backend:latest"
-    docker push "$(aws sts get-caller-identity --query Account --output text).dkr.ecr.$REGION.amazonaws.com/${APP_NAME}-backend:latest"
+    
+    echo "Tagging and pushing image..."
+    docker tag "${APP_NAME}-backend:latest" "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/${APP_NAME}-backend:latest"
+    docker push "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/${APP_NAME}-backend:latest"
     
     echo -e "${GREEN}✓ Docker image pushed to ECR${NC}"
     
+    # Check if App Runner service already exists
+    if aws apprunner list-services --region $REGION --query "ServiceSummaryList[?ServiceName=='${APP_NAME}-backend']" --output text | grep -q "${APP_NAME}-backend"; then
+        echo -e "${YELLOW}App Runner service already exists. Updating...${NC}"
+        
+        # Get service ARN
+        SERVICE_ARN=$(aws apprunner list-services \
+            --region $REGION \
+            --query "ServiceSummaryList[?ServiceName=='${APP_NAME}-backend'].ServiceArn" \
+            --output text)
+        
+        # Update the service with new image
+        aws apprunner start-deployment \
+            --service-arn "$SERVICE_ARN" \
+            --region $REGION
+        
+        echo -e "${GREEN}✓ App Runner service update initiated${NC}"
+        return 0
+    fi
+    
     # Create App Runner service
+    echo "Creating App Runner service..."
     cat > apprunner-config.json << EOF
 {
     "ServiceName": "${APP_NAME}-backend",
