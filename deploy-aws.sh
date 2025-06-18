@@ -522,21 +522,89 @@ deploy_frontend() {
 setup_environment() {
     echo -e "${YELLOW}Setting up environment variables...${NC}"
     
+    # Get service details
+    SERVICE_ARN=$(aws apprunner list-services \
+        --region $REGION \
+        --query "ServiceSummaryList[?ServiceName=='${APP_NAME}-backend'].ServiceArn" \
+        --output text 2>/dev/null)
+    
+    SERVICE_URL=$(aws apprunner describe-service \
+        --service-arn "$SERVICE_ARN" \
+        --region $REGION \
+        --query 'Service.ServiceUrl' \
+        --output text 2>/dev/null)
+    
+    # Get database endpoint if available
+    DB_ENDPOINT_CURRENT=$(aws rds describe-db-instances \
+        --db-instance-identifier "${APP_NAME}-db" \
+        --query 'DBInstances[0].Endpoint.Address' \
+        --output text \
+        --region $REGION 2>/dev/null || echo "your-db-endpoint")
+    
     cat << EOF
 
 🔧 ENVIRONMENT VARIABLES NEEDED:
 
-For App Runner (Backend):
-- DATABASE_URL=postgresql://dbadmin:$DB_PASSWORD@$DB_ENDPOINT:5432/emailanalytics
+DEPLOYMENT SUMMARY:
+==================
+✅ Backend URL: https://$SERVICE_URL
+✅ Database: $DB_ENDPOINT_CURRENT
+✅ Region: $REGION
+✅ Service ARN: $SERVICE_ARN
+
+REQUIRED ENVIRONMENT VARIABLES:
+==============================
+
+For App Runner Backend Service:
+-------------------------------
+Set these in AWS App Runner Console:
+https://console.aws.amazon.com/apprunner/home?region=$REGION#/services
+
+Required Variables:
+- NODE_ENV=production
+- PORT=5000
+- DATABASE_URL=postgresql://dbadmin:YOUR_DB_PASSWORD@$DB_ENDPOINT_CURRENT:5432/emailanalytics
 - OPENAI_API_KEY=your-openai-api-key
 - VITE_AZURE_CLIENT_ID=your-azure-client-id
 - VITE_AZURE_TENANT_ID=your-azure-tenant-id
-- JWT_SECRET=your-jwt-secret
+- JWT_SECRET=your-jwt-secret-key
 
-For Amplify (Frontend):
+For Amplify Frontend:
+--------------------
+Set these in AWS Amplify Console:
+https://console.aws.amazon.com/amplify/home?region=$REGION
+
+Required Variables:
 - VITE_AZURE_CLIENT_ID=your-azure-client-id
 - VITE_AZURE_TENANT_ID=your-azure-tenant-id
-- VITE_REDIRECT_URI=https://your-app-domain.amplifyapp.com
+
+NEXT STEPS:
+===========
+1. Set environment variables in App Runner:
+   • Go to: https://console.aws.amazon.com/apprunner/home?region=$REGION#/services
+   • Click on: $APP_NAME-backend
+   • Go to: Configuration tab → Environment variables
+   • Add all required variables listed above
+
+2. Deploy frontend to Amplify:
+   • Go to: https://console.aws.amazon.com/amplify/home?region=$REGION
+   • Create new app from GitHub repository
+   • Set frontend environment variables
+
+3. Update Azure AD redirect URIs:
+   • Add backend URL: https://$SERVICE_URL
+   • Add frontend URL when Amplify is deployed
+
+4. Test your deployment:
+   • Backend: https://$SERVICE_URL/api/dashboard/metrics
+   • Check logs: aws logs tail /aws/apprunner/$APP_NAME-backend/application --region $REGION --follow
+
+IMPORTANT NOTES:
+===============
+• Replace YOUR_DB_PASSWORD with the database password shown during deployment
+• Get your Azure credentials from Azure Portal
+• Generate a strong JWT_SECRET (32+ random characters)
+• Update redirect URIs in Azure AD after frontend deployment
 
 EOF
 }
