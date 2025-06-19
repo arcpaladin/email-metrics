@@ -74,33 +74,12 @@ aws ecr create-repository \
 aws ecr get-login-password --region $REGION | \
     docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com
 
-# Ensure dependencies are installed
-echo "Installing dependencies..."
-npm ci
-
-# Build frontend first
-echo "Building frontend assets..."
-if npm run build; then
-    echo -e "${GREEN}✓ Frontend build successful${NC}"
-else
-    echo -e "${RED}✗ Frontend build failed${NC}"
-    exit 1
-fi
-
-# Verify built assets exist
-if [ ! -d "client/dist" ]; then
-    echo -e "${RED}✗ Frontend build output not found${NC}"
-    exit 1
-fi
-
 # Build and push Docker image
-echo "Building Docker image..."
-if docker build -t "${APP_NAME}-backend" . --no-cache; then
+echo "Building Docker image (this may take a few minutes)..."
+if docker build -t "${APP_NAME}-backend" . --progress=plain; then
     echo -e "${GREEN}✓ Docker build successful${NC}"
 else
     echo -e "${RED}✗ Docker build failed${NC}"
-    echo "Checking Docker build logs..."
-    docker build -t "${APP_NAME}-backend" . --progress=plain
     exit 1
 fi
 
@@ -145,23 +124,60 @@ cat > apprunner-service.json << EOF
 }
 EOF
 
-# Create App Runner service
-echo "Creating App Runner service..."
-SERVICE_ARN=$(aws apprunner create-service \
-    --cli-input-json file://apprunner-service.json \
+# Check if App Runner service already exists
+SERVICE_ARN=$(aws apprunner list-services \
     --region $REGION \
-    --query 'Service.ServiceArn' \
-    --output text 2>/dev/null || \
-    aws apprunner list-services \
+    --query "ServiceSummaryList[?ServiceName=='${APP_NAME}-backend'].ServiceArn" \
+    --output text 2>/dev/null || echo "")
+
+if [ -n "$SERVICE_ARN" ]; then
+    echo "App Runner service already exists. Updating..."
+    
+    # Update existing service
+    cat > apprunner-update.json << EOF
+{
+    "SourceConfiguration": {
+        "ImageRepository": {
+            "ImageIdentifier": "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/${APP_NAME}-backend:latest",
+            "ImageConfiguration": {
+                "Port": "5000",
+                "RuntimeEnvironmentVariables": {
+                    "NODE_ENV": "production",
+                    "PORT": "5000",
+                    "DATABASE_URL": "postgresql://dbadmin:$DB_PASSWORD@$DB_ENDPOINT:5432/emailanalytics",
+                    "JWT_SECRET": "production-jwt-secret-2024",
+                    "OPENAI_API_KEY": "${OPENAI_API_KEY:-}"
+                }
+            },
+            "ImageRepositoryType": "ECR"
+        }
+    }
+}
+EOF
+    
+    aws apprunner update-service \
+        --service-arn "$SERVICE_ARN" \
+        --cli-input-json file://apprunner-update.json \
+        --region $REGION
+    
+    rm -f apprunner-update.json
+else
+    echo "Creating new App Runner service..."
+    SERVICE_ARN=$(aws apprunner create-service \
+        --cli-input-json file://apprunner-service.json \
         --region $REGION \
-        --query "ServiceSummaryList[?ServiceName=='${APP_NAME}-backend'].ServiceArn" \
+        --query 'Service.ServiceArn' \
         --output text)
+fi
 
 if [ -n "$SERVICE_ARN" ]; then
     echo "Waiting for App Runner service to be running..."
     
-    # Wait for service to be ready
-    while true; do
+    # Wait for service to be ready with timeout
+    TIMEOUT=1200  # 20 minutes
+    ELAPSED=0
+    
+    while [ $ELAPSED -lt $TIMEOUT ]; do
         SERVICE_STATUS=$(aws apprunner describe-service \
             --service-arn "$SERVICE_ARN" \
             --region $REGION \
@@ -169,15 +185,24 @@ if [ -n "$SERVICE_ARN" ]; then
             --output text)
         
         if [ "$SERVICE_STATUS" = "RUNNING" ]; then
+            echo -e "${GREEN}✓ App Runner service is running${NC}"
             break
         elif [ "$SERVICE_STATUS" = "CREATE_FAILED" ] || [ "$SERVICE_STATUS" = "DELETE_FAILED" ]; then
-            echo -e "${RED}✗ App Runner service failed to start${NC}"
+            echo -e "${RED}✗ App Runner service failed: $SERVICE_STATUS${NC}"
             exit 1
         fi
         
-        echo "Service status: $SERVICE_STATUS - waiting..."
+        echo "Service status: $SERVICE_STATUS - waiting... ($ELAPSED seconds elapsed)"
         sleep 30
+        ELAPSED=$((ELAPSED + 30))
     done
+    
+    if [ $ELAPSED -ge $TIMEOUT ]; then
+        echo -e "${YELLOW}⚠ Timeout waiting for service to start. Check AWS console for status.${NC}"
+    fi
+else
+    echo -e "${RED}✗ Failed to create or find App Runner service${NC}"
+    exit 1
 fi
 
 # Get service URL
