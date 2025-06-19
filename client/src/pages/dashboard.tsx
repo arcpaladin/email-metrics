@@ -27,25 +27,31 @@ export default function Dashboard() {
   const { toast } = useToast();
 
   useEffect(() => {
-    const currentUser = AuthManager.getUser();
-    const token = AuthManager.getToken();
+    // Check for authentication immediately and clear invalid state
+    const checkAuth = () => {
+      const currentUser = AuthManager.getUser();
+      const token = AuthManager.getToken();
+      
+      // If we detect any authentication issues, clear everything
+      if ((currentUser && !token) || (!currentUser && token) || !currentUser || !token) {
+        console.log('Authentication issue detected, clearing all local storage');
+        localStorage.clear();
+        sessionStorage.clear();
+        
+        // Clear cookies if any
+        document.cookie.split(";").forEach(function(c) { 
+          document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+        });
+        
+        // Force redirect to login
+        window.location.replace('/login');
+        return;
+      }
+      
+      setUser(currentUser);
+    };
     
-    // Clear invalid authentication state immediately
-    if ((currentUser && !token) || (!currentUser && token)) {
-      console.log('Invalid authentication state detected, clearing all data');
-      localStorage.clear();
-      window.location.href = '/login';
-      return;
-    }
-    
-    // If we have neither user nor token, redirect to login
-    if (!currentUser && !token) {
-      console.log('No authentication found, redirecting to login');
-      window.location.href = '/login';
-      return;
-    }
-    
-    setUser(currentUser);
+    checkAuth();
   }, []);
 
   // Data queries
