@@ -457,10 +457,38 @@ EOF
         echo "App Runner service exists. Updating configuration..."
         
         # Update the service with new image and configuration
+        cat > apprunner-update.json << EOF
+{
+    "SourceConfiguration": {
+        "ImageRepository": {
+            "ImageIdentifier": "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/${APP_NAME}-backend:latest",
+            "ImageConfiguration": {
+                "Port": "5000",
+                "RuntimeEnvironmentVariables": {
+                    "NODE_ENV": "production",
+                    "PORT": "5000",
+                    "DATABASE_URL": "postgresql://dbadmin:$DB_PASSWORD@$DB_ENDPOINT_CURRENT:5432/emailanalytics",
+                    "JWT_SECRET": "production-jwt-secret-2024-secure-token",
+                    "OPENAI_API_KEY": "${OPENAI_API_KEY:-}"
+                }
+            },
+            "ImageRepositoryType": "ECR"
+        }
+    },
+    "HealthCheckConfiguration": {
+        "Protocol": "HTTP",
+        "Path": "/api/health",
+        "Interval": 10,
+        "Timeout": 5,
+        "HealthyThreshold": 1,
+        "UnhealthyThreshold": 5
+    }
+}
+EOF
+
         aws apprunner update-service \
             --service-arn "$SERVICE_ARN" \
-            --source-configuration ImageRepository="{ImageIdentifier=$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/${APP_NAME}-backend:latest,ImageConfiguration={Port=5000,RuntimeEnvironmentVariables={NODE_ENV=production,PORT=5000,DATABASE_URL=postgresql://dbadmin:$DB_PASSWORD@$DB_ENDPOINT_CURRENT:5432/emailanalytics,JWT_SECRET=production-jwt-secret-2024-secure-token}},ImageRepositoryType=ECR}" \
-            --health-check-configuration Protocol=HTTP,Path=/api/health,Interval=10,Timeout=5,HealthyThreshold=1,UnhealthyThreshold=5 \
+            --cli-input-json file://apprunner-update.json \
             --region $REGION
         
         echo -e "${GREEN}✓ App Runner service updated successfully${NC}"

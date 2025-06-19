@@ -1,130 +1,133 @@
 #!/bin/bash
 
-# Check AWS App Runner Service Status
+# Deployment Status Checker for Email Analytics Dashboard
+set -e
+
+REGION="us-east-1"
 APP_NAME="email-analytics"
-REGION="us-east-2"
-
-# Function to check specific service by ARN
-check_service_by_arn() {
-    local service_arn=$1
-    echo "Checking service: $service_arn"
-    
-    SERVICE_INFO=$(aws apprunner describe-service \
-        --service-arn "$service_arn" \
-        --region $REGION \
-        --output json 2>/dev/null)
-    
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}Failed to get service information for ARN: $service_arn${NC}"
-        return 1
-    fi
-    
-    # Extract status and details
-    STATUS=$(echo "$SERVICE_INFO" | jq -r '.Service.Status')
-    SERVICE_URL=$(echo "$SERVICE_INFO" | jq -r '.Service.ServiceUrl // "Not available"')
-    CREATED_AT=$(echo "$SERVICE_INFO" | jq -r '.Service.CreatedAt')
-    UPDATED_AT=$(echo "$SERVICE_INFO" | jq -r '.Service.UpdatedAt')
-    
-    echo "Status: $STATUS"
-    echo "URL: $SERVICE_URL"
-    echo "Created: $CREATED_AT"
-    echo "Updated: $UPDATED_AT"
-    
-    return 0
-}
-
-# Check if specific ARN provided as argument
-if [ "$1" != "" ]; then
-    echo "Checking specific service ARN: $1"
-    check_service_by_arn "$1"
-    exit 0
-fi
 
 # Colors
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 RED='\033[0;31m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo "Checking App Runner service status..."
+echo "Checking deployment status for $APP_NAME..."
 
-# Get service ARN
+# Check AWS CLI configuration
+if ! aws sts get-caller-identity >/dev/null 2>&1; then
+    echo -e "${RED}✗ AWS CLI not configured${NC}"
+    exit 1
+fi
+
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+echo -e "${GREEN}✓ AWS CLI configured (Account: $ACCOUNT_ID)${NC}"
+
+# Check RDS Database
+echo "Checking RDS database..."
+DB_STATUS=$(aws rds describe-db-instances \
+    --db-instance-identifier "${APP_NAME}-db" \
+    --region $REGION \
+    --query 'DBInstances[0].DBInstanceStatus' \
+    --output text 2>/dev/null || echo "not-found")
+
+if [ "$DB_STATUS" = "available" ]; then
+    DB_ENDPOINT=$(aws rds describe-db-instances \
+        --db-instance-identifier "${APP_NAME}-db" \
+        --region $REGION \
+        --query 'DBInstances[0].Endpoint.Address' \
+        --output text)
+    echo -e "${GREEN}✓ Database available at: $DB_ENDPOINT${NC}"
+elif [ "$DB_STATUS" = "not-found" ]; then
+    echo -e "${YELLOW}⚠ Database not found - needs to be created${NC}"
+else
+    echo -e "${YELLOW}⚠ Database status: $DB_STATUS${NC}"
+fi
+
+# Check ECR Repository
+echo "Checking ECR repository..."
+if aws ecr describe-repositories --repository-names "${APP_NAME}-backend" --region $REGION >/dev/null 2>&1; then
+    echo -e "${GREEN}✓ ECR repository exists${NC}"
+    
+    # Check for images
+    IMAGE_COUNT=$(aws ecr list-images \
+        --repository-name "${APP_NAME}-backend" \
+        --region $REGION \
+        --query 'length(imageIds)' \
+        --output text)
+    
+    if [ "$IMAGE_COUNT" -gt 0 ]; then
+        echo -e "${GREEN}✓ Docker images found ($IMAGE_COUNT)${NC}"
+    else
+        echo -e "${YELLOW}⚠ No Docker images found in repository${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠ ECR repository not found${NC}"
+fi
+
+# Check App Runner Service
+echo "Checking App Runner service..."
 SERVICE_ARN=$(aws apprunner list-services \
     --region $REGION \
     --query "ServiceSummaryList[?ServiceName=='${APP_NAME}-backend'].ServiceArn" \
-    --output text 2>/dev/null)
+    --output text 2>/dev/null || echo "")
 
-if [ -z "$SERVICE_ARN" ]; then
-    echo -e "${RED}No App Runner service found${NC}"
-    exit 1
-fi
-
-# Get detailed service information
-SERVICE_INFO=$(aws apprunner describe-service \
-    --service-arn "$SERVICE_ARN" \
-    --region $REGION \
-    --output json 2>/dev/null)
-
-if [ $? -ne 0 ]; then
-    echo -e "${RED}Failed to get service information${NC}"
-    exit 1
-fi
-
-# Extract key information
-STATUS=$(echo "$SERVICE_INFO" | jq -r '.Service.Status')
-SERVICE_URL=$(echo "$SERVICE_INFO" | jq -r '.Service.ServiceUrl // "Not available"')
-CREATED_AT=$(echo "$SERVICE_INFO" | jq -r '.Service.CreatedAt')
-UPDATED_AT=$(echo "$SERVICE_INFO" | jq -r '.Service.UpdatedAt')
-
-# Display status with color coding
-echo ""
-echo "Service Details:"
-echo "=================="
-echo "Name: ${APP_NAME}-backend"
-echo "ARN: $SERVICE_ARN"
-echo "Region: $REGION"
-
-case $STATUS in
-    "RUNNING")
-        echo -e "Status: ${GREEN}$STATUS${NC}"
-        echo -e "URL: ${GREEN}https://$SERVICE_URL${NC}"
-        ;;
-    "CREATE_FAILED"|"DELETE_FAILED"|"UPDATE_FAILED_ROLLBACK_COMPLETE")
-        echo -e "Status: ${RED}$STATUS${NC}"
-        ;;
-    "OPERATION_IN_PROGRESS"|"CREATING"|"UPDATING")
-        echo -e "Status: ${YELLOW}$STATUS${NC}"
-        echo "Service is still being processed. This may take several minutes."
-        ;;
-    *)
-        echo -e "Status: ${YELLOW}$STATUS${NC}"
-        ;;
-esac
-
-echo "Created: $CREATED_AT"
-echo "Updated: $UPDATED_AT"
-
-# Show recent operations if available
-echo ""
-echo "Recent Operations:"
-echo "=================="
-aws apprunner list-operations \
-    --service-arn "$SERVICE_ARN" \
-    --region $REGION \
-    --max-items 3 \
-    --query 'OperationSummaryList[*].[Type,Status,StartedAt]' \
-    --output table 2>/dev/null || echo "No operation history available"
-
-# If service is running, test connectivity
-if [ "$STATUS" = "RUNNING" ] && [ "$SERVICE_URL" != "Not available" ]; then
-    echo ""
-    echo "Testing connectivity..."
-    if curl -s -o /dev/null -w "%{http_code}" "https://$SERVICE_URL" | grep -q "200\|302\|404"; then
-        echo -e "${GREEN}✓ Service is accessible${NC}"
+if [ -n "$SERVICE_ARN" ]; then
+    SERVICE_STATUS=$(aws apprunner describe-service \
+        --service-arn "$SERVICE_ARN" \
+        --region $REGION \
+        --query 'Service.Status' \
+        --output text)
+    
+    SERVICE_URL=$(aws apprunner describe-service \
+        --service-arn "$SERVICE_ARN" \
+        --region $REGION \
+        --query 'Service.ServiceUrl' \
+        --output text)
+    
+    echo -e "${GREEN}✓ App Runner service status: $SERVICE_STATUS${NC}"
+    echo -e "${GREEN}✓ Service URL: https://$SERVICE_URL${NC}"
+    
+    # Test health endpoint
+    if curl -s -o /dev/null -w "%{http_code}" "https://$SERVICE_URL/api/health" | grep -q "200"; then
+        echo -e "${GREEN}✓ Health check passed${NC}"
     else
-        echo -e "${YELLOW}⚠ Service may not be fully ready${NC}"
+        echo -e "${RED}✗ Health check failed${NC}"
     fi
+else
+    echo -e "${YELLOW}⚠ App Runner service not found${NC}"
 fi
 
+# Check Amplify App
+echo "Checking Amplify application..."
+AMPLIFY_APPS=$(aws amplify list-apps \
+    --region $REGION \
+    --query "apps[?name=='${APP_NAME}-frontend'].appId" \
+    --output text 2>/dev/null || echo "")
+
+if [ -n "$AMPLIFY_APPS" ]; then
+    APP_ID=$(echo $AMPLIFY_APPS | cut -d' ' -f1)
+    AMPLIFY_URL=$(aws amplify get-app \
+        --app-id "$APP_ID" \
+        --region $REGION \
+        --query 'app.defaultDomain' \
+        --output text)
+    
+    echo -e "${GREEN}✓ Amplify app found${NC}"
+    echo -e "${GREEN}✓ Frontend URL: https://$APP_ID.$AMPLIFY_URL${NC}"
+else
+    echo -e "${YELLOW}⚠ Amplify app not found${NC}"
+fi
+
+# Summary
 echo ""
-echo "To view logs: aws logs tail /aws/apprunner/${APP_NAME}-backend/application --region $REGION --follow"
+echo "=== DEPLOYMENT SUMMARY ==="
+echo "Database: ${DB_STATUS:-not-found}"
+echo "Backend API: ${SERVICE_STATUS:-not-found}"
+echo "Frontend: ${AMPLIFY_APPS:+found}"
+
+if [ "$DB_STATUS" = "available" ] && [ "$SERVICE_STATUS" = "RUNNING" ] && [ -n "$AMPLIFY_APPS" ]; then
+    echo -e "${GREEN}✓ Full deployment appears to be running${NC}"
+else
+    echo -e "${YELLOW}⚠ Deployment incomplete - run deploy-simple.sh to complete setup${NC}"
+fi
