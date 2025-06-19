@@ -1,7 +1,10 @@
 #!/bin/bash
 
-# Simple AWS EC2 Deployment for Email Analytics Dashboard with RDS
+# AWS EC2 Deployment for Email Analytics Dashboard with RDS
+# Usage: ./deploy.sh [deploy|cleanup]
 set -e
+
+COMMAND=${1:-deploy}
 
 # Check if .env file exists
 if [ ! -f ".env" ]; then
@@ -12,21 +15,65 @@ fi
 # Load environment variables from .env file
 export $(grep -v '^#' .env | grep -v '^$' | xargs)
 
+# Function to cleanup resources
+cleanup_resources() {
+    echo "Cleaning up Email Analytics Dashboard resources..."
+    echo "Region: $REGION"
+    
+    # Terminate EC2 instance
+    echo "Finding and terminating EC2 instances..."
+    INSTANCE_IDS=$(aws ec2 describe-instances \
+        --filters "Name=tag:Name,Values=email-analytics-dashboard" "Name=instance-state-name,Values=running,pending" \
+        --query 'Reservations[].Instances[].InstanceId' \
+        --output text \
+        --region $REGION)
+    
+    if [ ! -z "$INSTANCE_IDS" ]; then
+        echo "Terminating instances: $INSTANCE_IDS"
+        aws ec2 terminate-instances --instance-ids $INSTANCE_IDS --region $REGION
+        echo "Waiting for instances to terminate..."
+        aws ec2 wait instance-terminated --instance-ids $INSTANCE_IDS --region $REGION
+        echo "EC2 instances terminated successfully"
+    else
+        echo "No running EC2 instances found"
+    fi
+    
+    # Delete RDS instance
+    echo "Deleting RDS database..."
+    aws rds delete-db-instance \
+        --db-instance-identifier email-analytics-db \
+        --skip-final-snapshot \
+        --region $REGION 2>/dev/null || echo "RDS instance not found or already deleted"
+    
+    # Delete security groups
+    echo "Deleting security groups..."
+    aws ec2 delete-security-group --group-name email-analytics-web --region $REGION 2>/dev/null || echo "Web security group not found"
+    aws ec2 delete-security-group --group-name email-analytics-db --region $REGION 2>/dev/null || echo "DB security group not found"
+    
+    echo "Cleanup completed!"
+    exit 0
+}
+
+# Check command
+if [ "$COMMAND" = "cleanup" ]; then
+    cleanup_resources
+fi
+
 echo "Deploying Email Analytics Dashboard with PostgreSQL RDS..."
 echo "Region: $REGION"
 echo "Database: $DB_NAME"
 
-# Get the latest Amazon Linux 2023 AMI ID for the region
-echo "Finding latest Amazon Linux 2023 AMI..."
+# Get the latest Ubuntu 22.04 LTS AMI ID for the region
+echo "Finding latest Ubuntu 22.04 LTS AMI..."
 LATEST_AMI=$(aws ec2 describe-images \
-    --owners amazon \
-    --filters "Name=name,Values=al2023-ami-2023*" "Name=architecture,Values=x86_64" \
+    --owners 099720109477 \
+    --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*" \
     --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
     --output text \
     --region $REGION)
 
 if [ "$LATEST_AMI" != "None" ] && [ ! -z "$LATEST_AMI" ]; then
-    echo "Using latest AMI: $LATEST_AMI"
+    echo "Using latest Ubuntu AMI: $LATEST_AMI"
     AMI_ID=$LATEST_AMI
 else
     echo "Using configured AMI: $AMI_ID"
@@ -137,12 +184,12 @@ echo "Step 3: Deploying application..."
 # Create user data script with database connection
 cat > userdata.sh << EOF
 #!/bin/bash
-yum update -y
-yum install -y git postgresql15
+apt-get update -y
+apt-get install -y git postgresql-client-14 curl
 
 # Install Node.js 18
-curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
-yum install -y nodejs
+curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+apt-get install -y nodejs
 
 # Install PM2
 npm install -g pm2
