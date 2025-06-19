@@ -3,17 +3,95 @@
 # AWS Deployment Script for Email Analytics Dashboard
 set -e
 
-# Configuration
+# Default configuration
 REGION="us-east-2"
 APP_NAME="email-analytics"
+SKIP_DATABASE=false
+SKIP_BACKEND=false
+SKIP_FRONTEND=false
+FORCE_RECREATE=false
 
 # Colors for output
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo "Starting deployment for $APP_NAME..."
+# Help function
+show_help() {
+    cat << EOF
+AWS Deployment Script for Email Analytics Dashboard
+
+Usage: $0 [OPTIONS]
+
+OPTIONS:
+    -r, --region REGION         AWS region (default: us-east-2)
+    -n, --name APP_NAME         Application name (default: email-analytics)
+    --skip-database            Skip RDS database creation
+    --skip-backend             Skip App Runner backend deployment
+    --skip-frontend            Skip Amplify frontend setup
+    --force-recreate           Delete and recreate existing resources
+    -h, --help                 Show this help message
+
+EXAMPLES:
+    $0                         # Full deployment with defaults
+    $0 --region us-east-1      # Deploy to different region
+    $0 --skip-database         # Skip database, deploy only backend
+    $0 --skip-frontend         # Deploy database and backend only
+    $0 --force-recreate        # Delete and recreate all resources
+
+ENVIRONMENT VARIABLES:
+    GITHUB_REPO_URL           GitHub repository URL for Amplify
+    OPENAI_API_KEY           OpenAI API key for AI features
+    VITE_AZURE_CLIENT_ID     Azure client ID for frontend
+    VITE_AZURE_TENANT_ID     Azure tenant ID for frontend
+
+EOF
+}
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -r|--region)
+            REGION="$2"
+            shift 2
+            ;;
+        -n|--name)
+            APP_NAME="$2"
+            shift 2
+            ;;
+        --skip-database)
+            SKIP_DATABASE=true
+            shift
+            ;;
+        --skip-backend)
+            SKIP_BACKEND=true
+            shift
+            ;;
+        --skip-frontend)
+            SKIP_FRONTEND=true
+            shift
+            ;;
+        --force-recreate)
+            FORCE_RECREATE=true
+            shift
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+echo -e "${BLUE}Starting deployment for $APP_NAME in region $REGION...${NC}"
+echo "Options: Database=$([ "$SKIP_DATABASE" = true ] && echo "SKIP" || echo "DEPLOY") Backend=$([ "$SKIP_BACKEND" = true ] && echo "SKIP" || echo "DEPLOY") Frontend=$([ "$SKIP_FRONTEND" = true ] && echo "SKIP" || echo "DEPLOY")"
+echo ""
 
 # Check if AWS CLI is configured
 if ! aws sts get-caller-identity >/dev/null 2>&1; then
@@ -26,43 +104,80 @@ ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 echo "AWS Account ID: $ACCOUNT_ID"
 
 # Step 1: Create RDS PostgreSQL Database
-echo "Creating RDS PostgreSQL database..."
+if [ "$SKIP_DATABASE" = false ]; then
+    echo "Creating RDS PostgreSQL database..."
+    
+    # Check if database exists
+    if aws rds describe-db-instances --db-instance-identifier "${APP_NAME}-db" --region $REGION >/dev/null 2>&1; then
+        if [ "$FORCE_RECREATE" = true ]; then
+            echo "Deleting existing database..."
+            aws rds delete-db-instance \
+                --db-instance-identifier "${APP_NAME}-db" \
+                --skip-final-snapshot \
+                --region $REGION
+            
+            echo "Waiting for database deletion..."
+            aws rds wait db-instance-deleted \
+                --db-instance-identifier "${APP_NAME}-db" \
+                --region $REGION
+        else
+            echo -e "${YELLOW}Database already exists, using existing instance${NC}"
+            DB_ENDPOINT=$(aws rds describe-db-instances \
+                --db-instance-identifier "${APP_NAME}-db" \
+                --region $REGION \
+                --query 'DBInstances[0].Endpoint.Address' \
+                --output text)
+            # Use default password for existing database
+            DB_PASSWORD="defaultpassword123"
+        fi
+    fi
+    
+    # Create database if it doesn't exist or was deleted
+    if ! aws rds describe-db-instances --db-instance-identifier "${APP_NAME}-db" --region $REGION >/dev/null 2>&1; then
+        # Generate random password
+        DB_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+        
+        aws rds create-db-instance \
+            --db-instance-identifier "${APP_NAME}-db" \
+            --db-instance-class db.t3.micro \
+            --engine postgres \
+            --master-username dbadmin \
+            --master-user-password "$DB_PASSWORD" \
+            --allocated-storage 20 \
+            --db-name emailanalytics \
+            --publicly-accessible \
+            --region $REGION \
+            --backup-retention-period 7 \
+            --storage-encrypted
+        
+        echo "Waiting for database to be available..."
+        aws rds wait db-instance-available \
+            --db-instance-identifier "${APP_NAME}-db" \
+            --region $REGION
+        
+        DB_ENDPOINT=$(aws rds describe-db-instances \
+            --db-instance-identifier "${APP_NAME}-db" \
+            --region $REGION \
+            --query 'DBInstances[0].Endpoint.Address' \
+            --output text)
+    fi
+    
+    echo -e "${GREEN}✓ Database ready at: $DB_ENDPOINT${NC}"
+else
+    echo -e "${YELLOW}Skipping database creation${NC}"
+    # Use environment variable or prompt for database URL
+    if [ -z "$DATABASE_URL" ]; then
+        echo "Please provide DATABASE_URL environment variable when skipping database creation"
+        exit 1
+    fi
+    # Extract components from DATABASE_URL for App Runner config
+    DB_ENDPOINT=$(echo $DATABASE_URL | sed -n 's/.*@\([^:]*\):.*/\1/p')
+    DB_PASSWORD="from-environment"
+fi
 
-# Generate random password
-DB_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
-
-# Create RDS instance
-aws rds create-db-instance \
-    --db-instance-identifier "${APP_NAME}-db" \
-    --db-instance-class db.t3.micro \
-    --engine postgres \
-    --master-username dbadmin \
-    --master-user-password "$DB_PASSWORD" \
-    --allocated-storage 20 \
-    --db-name emailanalytics \
-    --publicly-accessible \
-    --region $REGION \
-    --backup-retention-period 7 \
-    --storage-encrypted \
-    2>/dev/null || echo "Database may already exist"
-
-# Wait for database to be available
-echo "Waiting for database to be available..."
-aws rds wait db-instance-available \
-    --db-instance-identifier "${APP_NAME}-db" \
-    --region $REGION
-
-# Get database endpoint
-DB_ENDPOINT=$(aws rds describe-db-instances \
-    --db-instance-identifier "${APP_NAME}-db" \
-    --region $REGION \
-    --query 'DBInstances[0].Endpoint.Address' \
-    --output text)
-
-echo -e "${GREEN}✓ Database created at: $DB_ENDPOINT${NC}"
-
-# Step 2: Create IAM Role for App Runner
-echo "Creating IAM role for App Runner..."
+# Step 2: Create IAM Role for App Runner (if backend deployment enabled)
+if [ "$SKIP_BACKEND" = false ]; then
+    echo "Creating IAM role for App Runner..."
 
 # Create trust policy for App Runner
 cat > apprunner-trust-policy.json << EOF
@@ -257,51 +372,79 @@ SERVICE_URL=$(aws apprunner describe-service \
     --query 'Service.ServiceUrl' \
     --output text)
 
-echo -e "${GREEN}✓ Backend API deployed at: https://$SERVICE_URL${NC}"
+    echo -e "${GREEN}✓ Backend API deployed at: https://$SERVICE_URL${NC}"
 
-# Step 4: Test health endpoint
-echo "Testing backend health endpoint..."
-sleep 10
-if curl -s -o /dev/null -w "%{http_code}" "https://$SERVICE_URL/api/health" | grep -q "200"; then
-    echo -e "${GREEN}✓ Health check passed${NC}"
-else
-    echo -e "${YELLOW}⚠ Health check failed - service may still be starting${NC}"
-fi
-
-# Step 5: Create Amplify app (if repository URL is provided)
-if [ -n "${GITHUB_REPO_URL:-}" ]; then
-    echo "Setting up Amplify frontend deployment..."
-    
-    APP_ID=$(aws amplify create-app \
-        --name "${APP_NAME}-frontend" \
-        --repository "$GITHUB_REPO_URL" \
-        --region $REGION \
-        --environment-variables "VITE_API_URL=https://$SERVICE_URL,VITE_AZURE_CLIENT_ID=${VITE_AZURE_CLIENT_ID:-},VITE_AZURE_TENANT_ID=${VITE_AZURE_TENANT_ID:-}" \
-        --query 'app.appId' \
-        --output text 2>/dev/null || echo "App may already exist")
-    
-    if [ "$APP_ID" != "App may already exist" ]; then
-        # Create branch
-        aws amplify create-branch \
-            --app-id "$APP_ID" \
-            --branch-name "main" \
-            --region $REGION
-        
-        # Start deployment
-        aws amplify start-job \
-            --app-id "$APP_ID" \
-            --branch-name "main" \
-            --job-type "RELEASE" \
-            --region $REGION
-        
-        echo -e "${GREEN}✓ Amplify frontend deployment started${NC}"
+    # Test health endpoint
+    echo "Testing backend health endpoint..."
+    sleep 10
+    if curl -s -o /dev/null -w "%{http_code}" "https://$SERVICE_URL/api/health" | grep -q "200"; then
+        echo -e "${GREEN}✓ Health check passed${NC}"
+    else
+        echo -e "${YELLOW}⚠ Health check failed - service may still be starting${NC}"
     fi
 else
-    echo -e "${YELLOW}⚠ GITHUB_REPO_URL not set - skipping Amplify deployment${NC}"
-    echo "   Deploy manually through Amplify console with these environment variables:"
-    echo "   VITE_API_URL=https://$SERVICE_URL"
-    echo "   VITE_AZURE_CLIENT_ID=${VITE_AZURE_CLIENT_ID:-your-client-id}"
-    echo "   VITE_AZURE_TENANT_ID=${VITE_AZURE_TENANT_ID:-your-tenant-id}"
+    echo -e "${YELLOW}Skipping backend deployment${NC}"
+    if [ -z "$SERVICE_URL" ]; then
+        SERVICE_URL="your-existing-backend-url.com"
+        echo "Note: Set SERVICE_URL environment variable for existing backend"
+    fi
+fi
+
+# Step 5: Create Amplify app (if frontend deployment enabled)
+if [ "$SKIP_FRONTEND" = false ]; then
+    if [ -n "${GITHUB_REPO_URL:-}" ]; then
+        echo "Setting up Amplify frontend deployment..."
+        
+        # Check if Amplify app exists
+        EXISTING_APP_ID=$(aws amplify list-apps \
+            --region $REGION \
+            --query "apps[?name=='${APP_NAME}-frontend'].appId" \
+            --output text 2>/dev/null || echo "")
+        
+        if [ -n "$EXISTING_APP_ID" ] && [ "$FORCE_RECREATE" = true ]; then
+            echo "Deleting existing Amplify app..."
+            aws amplify delete-app \
+                --app-id "$EXISTING_APP_ID" \
+                --region $REGION
+            EXISTING_APP_ID=""
+        fi
+        
+        if [ -z "$EXISTING_APP_ID" ]; then
+            APP_ID=$(aws amplify create-app \
+                --name "${APP_NAME}-frontend" \
+                --repository "$GITHUB_REPO_URL" \
+                --region $REGION \
+                --environment-variables "VITE_API_URL=https://$SERVICE_URL,VITE_AZURE_CLIENT_ID=${VITE_AZURE_CLIENT_ID:-},VITE_AZURE_TENANT_ID=${VITE_AZURE_TENANT_ID:-}" \
+                --query 'app.appId' \
+                --output text)
+            
+            # Create branch
+            aws amplify create-branch \
+                --app-id "$APP_ID" \
+                --branch-name "main" \
+                --region $REGION
+            
+            # Start deployment
+            aws amplify start-job \
+                --app-id "$APP_ID" \
+                --branch-name "main" \
+                --job-type "RELEASE" \
+                --region $REGION
+            
+            echo -e "${GREEN}✓ Amplify frontend deployment started${NC}"
+        else
+            echo -e "${YELLOW}Using existing Amplify app: $EXISTING_APP_ID${NC}"
+            APP_ID="$EXISTING_APP_ID"
+        fi
+    else
+        echo -e "${YELLOW}⚠ GITHUB_REPO_URL not set - skipping Amplify deployment${NC}"
+        echo "   Deploy manually through Amplify console with these environment variables:"
+        echo "   VITE_API_URL=https://$SERVICE_URL"
+        echo "   VITE_AZURE_CLIENT_ID=${VITE_AZURE_CLIENT_ID:-your-client-id}"
+        echo "   VITE_AZURE_TENANT_ID=${VITE_AZURE_TENANT_ID:-your-tenant-id}"
+    fi
+else
+    echo -e "${YELLOW}Skipping frontend deployment${NC}"
 fi
 
 # Output deployment information
