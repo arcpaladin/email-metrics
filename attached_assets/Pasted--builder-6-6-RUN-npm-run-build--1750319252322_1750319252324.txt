@@ -1,0 +1,33 @@
+ [builder 6/6] RUN npm run build:                                                                                                                                     
+0.191                                                                                                                                                                   
+0.191 > rest-express@1.0.0 build                                                                                                                                        
+0.191 > vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist                                                   
+0.191                                                                                                                                                                   
+0.287 vite v5.4.14 building for production...
+0.310 transforming...
+0.426 Browserslist: browsers data (caniuse-lite) is 8 months old. Please run:
+0.426   npx update-browserslist-db@latest
+0.426   Why you should do it regularly: https://github.com/browserslist/update-db#readme
+2.842 ✓ 2666 modules transformed.
+3.065 rendering chunks...
+3.075 computing gzip size...
+3.090 ../dist/public/index.html                   0.63 kB │ gzip:   0.38 kB
+3.090 ../dist/public/assets/index-BTG-Hnq_.css   65.30 kB │ gzip:  11.56 kB
+3.090 ../dist/public/assets/index-B6tgBQwq.js   978.34 kB │ gzip: 278.77 kB
+3.090 
+3.090 (!) Some chunks are larger than 500 kB after minification. Consider:
+3.090 - Using dynamic import() to code-split the application
+3.090 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+3.090 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+3.090 ✓ built in 2.79s
+3.107 /app/node_modules/.bin/esbuild: line 1: syntax error: unexpected word (expecting ")")
+------
+Dockerfile:23
+--------------------
+  21 |     
+  22 |     # Build the application
+  23 | >>> RUN npm run build
+  24 |     
+  25 |     # Production image
+--------------------
+ERROR: failed to solve: process "/bin/sh -c npm run build" did not complete successfully: exit code

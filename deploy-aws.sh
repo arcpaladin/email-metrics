@@ -74,9 +74,36 @@ aws ecr create-repository \
 aws ecr get-login-password --region $REGION | \
     docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com
 
+# Ensure dependencies are installed
+echo "Installing dependencies..."
+npm ci
+
+# Build frontend first
+echo "Building frontend assets..."
+if npm run build; then
+    echo -e "${GREEN}✓ Frontend build successful${NC}"
+else
+    echo -e "${RED}✗ Frontend build failed${NC}"
+    exit 1
+fi
+
+# Verify built assets exist
+if [ ! -d "client/dist" ]; then
+    echo -e "${RED}✗ Frontend build output not found${NC}"
+    exit 1
+fi
+
 # Build and push Docker image
 echo "Building Docker image..."
-docker build -t "${APP_NAME}-backend" .
+if docker build -t "${APP_NAME}-backend" . --no-cache; then
+    echo -e "${GREEN}✓ Docker build successful${NC}"
+else
+    echo -e "${RED}✗ Docker build failed${NC}"
+    echo "Checking Docker build logs..."
+    docker build -t "${APP_NAME}-backend" . --progress=plain
+    exit 1
+fi
+
 docker tag "${APP_NAME}-backend:latest" "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/${APP_NAME}-backend:latest"
 docker push "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/${APP_NAME}-backend:latest"
 
