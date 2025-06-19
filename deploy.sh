@@ -13,7 +13,13 @@ if [ ! -f ".env" ]; then
 fi
 
 # Load environment variables from .env file
-export $(grep -v '^#' .env | grep -v '^$' | xargs)
+set -a
+while IFS='=' read -r key value; do
+    if [[ $key != \#* ]] && [[ -n $key ]] && [[ -n $value ]]; then
+        export "$key=$value"
+    fi
+done < .env
+set +a
 
 # Function to cleanup resources
 cleanup_resources() {
