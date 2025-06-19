@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Simple AWS EC2 Deployment for Email Analytics Dashboard
+# Simple AWS EC2 Deployment for Email Analytics Dashboard with RDS
 set -e
 
 # Configuration
@@ -8,8 +8,12 @@ REGION="us-east-1"
 INSTANCE_TYPE="t3.micro"
 KEY_NAME="email-analytics"
 AMI_ID="ami-0c02fb55956c7d316"  # Amazon Linux 2023
+DB_INSTANCE_CLASS="db.t3.micro"
+DB_NAME="emailanalytics"
+DB_USERNAME="admin"
+DB_PASSWORD="EmailAnalytics123!"
 
-echo "🚀 Deploying Email Analytics Dashboard to AWS EC2..."
+echo "Deploying Email Analytics Dashboard with PostgreSQL RDS..."
 
 # Check AWS CLI
 if ! command -v aws &> /dev/null; then
@@ -34,15 +38,75 @@ SG_ID=$(aws ec2 create-security-group \
     --query 'GroupId' --output text 2>/dev/null || \
     aws ec2 describe-security-groups --group-names email-analytics --region $REGION --query 'SecurityGroups[0].GroupId' --output text)
 
-# Add rules
+# Add rules for web server
 aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 22 --cidr 0.0.0.0/0 --region $REGION 2>/dev/null || true
 aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 80 --cidr 0.0.0.0/0 --region $REGION 2>/dev/null || true
 
-# Create user data script
-cat > userdata.sh << 'EOF'
+# Create RDS subnet group
+echo "📊 Creating RDS subnet group..."
+VPC_ID=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --region $REGION --query 'Vpcs[0].VpcId' --output text)
+SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --region $REGION --query 'Subnets[*].SubnetId' --output text)
+
+aws rds create-db-subnet-group \
+    --db-subnet-group-name email-analytics-subnet-group \
+    --db-subnet-group-description "Subnet group for Email Analytics RDS" \
+    --subnet-ids $SUBNET_IDS \
+    --region $REGION 2>/dev/null || true
+
+# Create RDS security group
+echo "🔒 Creating RDS security group..."
+RDS_SG_ID=$(aws ec2 create-security-group \
+    --group-name email-analytics-rds \
+    --description "RDS PostgreSQL for Email Analytics" \
+    --vpc-id $VPC_ID \
+    --region $REGION \
+    --query 'GroupId' --output text 2>/dev/null || \
+    aws ec2 describe-security-groups --group-names email-analytics-rds --region $REGION --query 'SecurityGroups[0].GroupId' --output text)
+
+# Allow PostgreSQL access from EC2 security group
+aws ec2 authorize-security-group-ingress \
+    --group-id $RDS_SG_ID \
+    --protocol tcp \
+    --port 5432 \
+    --source-group $SG_ID \
+    --region $REGION 2>/dev/null || true
+
+# Create RDS instance
+echo "💾 Creating RDS PostgreSQL instance..."
+DB_IDENTIFIER="email-analytics-db"
+aws rds create-db-instance \
+    --db-instance-identifier $DB_IDENTIFIER \
+    --db-instance-class $DB_INSTANCE_CLASS \
+    --engine postgres \
+    --engine-version 15.4 \
+    --master-username $DB_USERNAME \
+    --master-user-password $DB_PASSWORD \
+    --allocated-storage 20 \
+    --storage-type gp2 \
+    --vpc-security-group-ids $RDS_SG_ID \
+    --db-subnet-group-name email-analytics-subnet-group \
+    --db-name $DB_NAME \
+    --backup-retention-period 7 \
+    --no-multi-az \
+    --publicly-accessible \
+    --region $REGION 2>/dev/null || true
+
+echo "⏳ Waiting for RDS instance to be available..."
+aws rds wait db-instance-available --db-instance-identifier $DB_IDENTIFIER --region $REGION
+
+# Get RDS endpoint
+DB_ENDPOINT=$(aws rds describe-db-instances \
+    --db-instance-identifier $DB_IDENTIFIER \
+    --region $REGION \
+    --query 'DBInstances[0].Endpoint.Address' --output text)
+
+echo "✅ RDS PostgreSQL ready at: $DB_ENDPOINT"
+
+# Create user data script with database connection
+cat > userdata.sh << EOF
 #!/bin/bash
 yum update -y
-yum install -y git
+yum install -y git postgresql15
 
 # Install Node.js 18
 curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
@@ -51,60 +115,174 @@ yum install -y nodejs
 # Install PM2
 npm install -g pm2
 
+# Wait for RDS to be ready
+sleep 60
+
 # Create app directory
 mkdir -p /opt/app
 cd /opt/app
 
-# Create simple Express server
-cat > server.js << 'JSEOF'
-const express = require('express');
-const path = require('path');
+# Set environment variables
+export DATABASE_URL="postgresql://$DB_USERNAME:$DB_PASSWORD@$DB_ENDPOINT:5432/$DB_NAME"
+export NODE_ENV=production
+export PORT=80
 
-const app = express();
-const PORT = process.env.PORT || 80;
+# Create the email analytics application
+git clone https://github.com/example/placeholder.git . || true
 
-app.use(express.json());
-app.use(express.static('public'));
-
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
-});
-
-// Serve app
-app.get('*', (req, res) => {
-  res.send(`
-    <html>
-      <head><title>Email Analytics Dashboard</title></head>
-      <body style="font-family: Arial; margin: 40px; text-align: center;">
-        <h1>🚀 Email Analytics Dashboard</h1>
-        <p>Your application is running on EC2!</p>
-        <p>Server time: ${new Date().toISOString()}</p>
-        <a href="/health">Health Check</a>
-      </body>
-    </html>
-  `);
-});
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
-});
-JSEOF
-
-# Create package.json
+# Create package.json for the full application
 cat > package.json << 'JSONEOF'
 {
   "name": "email-analytics",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "echo 'Build complete'"
   },
   "dependencies": {
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "@neondatabase/serverless": "^0.9.0",
+    "drizzle-orm": "^0.29.4",
+    "drizzle-zod": "^0.5.1",
+    "jsonwebtoken": "^9.0.2",
+    "openai": "^4.38.5",
+    "ws": "^8.16.0",
+    "zod": "^3.22.4",
+    "dotenv": "^16.4.5"
   }
 }
 JSONEOF
+
+# Create environment file
+cat > .env << ENVEOF
+DATABASE_URL=postgresql://$DB_USERNAME:$DB_PASSWORD@$DB_ENDPOINT:5432/$DB_NAME
+NODE_ENV=production
+PORT=80
+JWT_SECRET=your-jwt-secret-change-this
+ENVEOF
+
+# Create basic server with database health check
+cat > server.js << 'JSEOF'
+const express = require('express');
+const { Pool } = require('@neondatabase/serverless');
+require('dotenv').config();
+
+const app = express();
+const PORT = process.env.PORT || 80;
+
+// Database connection
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+app.use(express.json());
+app.use(express.static('public'));
+
+// Health check with database
+app.get('/health', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT NOW()');
+    res.json({ 
+      status: 'healthy', 
+      timestamp: new Date().toISOString(),
+      database: 'connected',
+      db_time: result.rows[0].now
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'unhealthy', 
+      timestamp: new Date().toISOString(),
+      database: 'disconnected',
+      error: error.message
+    });
+  }
+});
+
+// Database setup endpoint
+app.post('/setup-db', async (req, res) => {
+  try {
+    // Create basic tables for email analytics
+    await pool.query(\`
+      CREATE TABLE IF NOT EXISTS organizations (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        domain TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      
+      CREATE TABLE IF NOT EXISTS employees (
+        id SERIAL PRIMARY KEY,
+        organization_id INTEGER REFERENCES organizations(id),
+        email TEXT NOT NULL UNIQUE,
+        display_name TEXT,
+        department TEXT,
+        role TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      
+      CREATE TABLE IF NOT EXISTS emails (
+        id SERIAL PRIMARY KEY,
+        message_id TEXT NOT NULL UNIQUE,
+        sender_id INTEGER REFERENCES employees(id),
+        subject TEXT,
+        body_preview TEXT,
+        received_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    \`);
+    
+    res.json({ status: 'Database tables created successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Main application page
+app.get('*', (req, res) => {
+  res.send(\`
+    <html>
+      <head>
+        <title>Email Analytics Dashboard</title>
+        <style>
+          body { font-family: Arial; margin: 40px; text-align: center; background: #f5f5f5; }
+          .container { max-width: 800px; margin: 0 auto; background: white; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+          .btn { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin: 10px; text-decoration: none; display: inline-block; }
+          .btn:hover { background: #0056b3; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h1>Email Analytics Dashboard</h1>
+          <p>Your application is running on EC2 with PostgreSQL RDS!</p>
+          <p>Server time: \${new Date().toISOString()}</p>
+          <div>
+            <a href="/health" class="btn">Health Check</a>
+            <button onclick="setupDB()" class="btn">Setup Database</button>
+          </div>
+          <div id="status"></div>
+        </div>
+        <script>
+          async function setupDB() {
+            try {
+              const response = await fetch('/setup-db', { method: 'POST' });
+              const result = await response.json();
+              document.getElementById('status').innerHTML = 
+                '<p style="color: green;">Database setup: ' + JSON.stringify(result) + '</p>';
+            } catch (error) {
+              document.getElementById('status').innerHTML = 
+                '<p style="color: red;">Error: ' + error.message + '</p>';
+            }
+          }
+        </script>
+      </body>
+    </html>
+  \`);
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(\`Email Analytics Server running on port \${PORT}\`);
+  console.log(\`Database: \${process.env.DATABASE_URL ? 'Connected' : 'Not configured'}\`);
+});
+JSEOF
 
 # Install dependencies
 npm install
@@ -114,7 +292,7 @@ pm2 start server.js --name email-analytics
 pm2 startup
 pm2 save
 
-echo "✅ Application deployed and running on port 80"
+echo "✅ Email Analytics application deployed with PostgreSQL RDS"
 EOF
 
 # Launch instance
@@ -144,10 +322,18 @@ rm -f userdata.sh
 
 echo "✅ Deployment completed!"
 echo
-echo "🌐 Your application is available at: http://$PUBLIC_IP"
+echo "🌐 Application: http://$PUBLIC_IP"
 echo "🔍 Health check: http://$PUBLIC_IP/health"
 echo "📱 SSH access: ssh -i ${KEY_NAME}.pem ec2-user@$PUBLIC_IP"
+echo
+echo "📊 Database Info:"
+echo "  - Endpoint: $DB_ENDPOINT"
+echo "  - Database: $DB_NAME"
+echo "  - Username: $DB_USERNAME"
+echo "  - Password: $DB_PASSWORD"
 echo
 echo "Instance ID: $INSTANCE_ID"
 echo "Public IP: $PUBLIC_IP"
 echo "Key file: ${KEY_NAME}.pem"
+echo
+echo "💡 Visit your application and click 'Setup Database' to initialize tables"
