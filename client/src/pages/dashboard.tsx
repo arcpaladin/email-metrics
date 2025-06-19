@@ -30,9 +30,17 @@ export default function Dashboard() {
     const currentUser = AuthManager.getUser();
     const token = AuthManager.getToken();
     
-    // If we have a user but no token, or vice versa, clear both and redirect to login
+    // Clear invalid authentication state immediately
     if ((currentUser && !token) || (!currentUser && token)) {
-      AuthManager.logout();
+      console.log('Invalid authentication state detected, clearing all data');
+      localStorage.clear();
+      window.location.href = '/login';
+      return;
+    }
+    
+    // If we have neither user nor token, redirect to login
+    if (!currentUser && !token) {
+      console.log('No authentication found, redirecting to login');
       window.location.href = '/login';
       return;
     }
@@ -76,6 +84,18 @@ export default function Dashboard() {
     
     setIsSyncing(true);
     try {
+      // Check authentication first
+      if (!AuthManager.isAuthenticated()) {
+        toast({
+          title: "Authentication Required",
+          description: "Please sign in with Microsoft first.",
+          variant: "destructive",
+        });
+        AuthManager.logout();
+        window.location.href = '/login';
+        return;
+      }
+
       // Get fresh access token
       const msalResult = await MSALService.signIn();
       
@@ -83,6 +103,20 @@ export default function Dashboard() {
       const response = await apiRequest('POST', '/api/emails/sync', {
         accessToken: msalResult.accessToken
       });
+      
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          toast({
+            title: "Authentication Expired",
+            description: "Your Microsoft login has expired. Please sign in again.",
+            variant: "destructive",
+          });
+          AuthManager.logout();
+          window.location.href = '/login';
+          return;
+        }
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
       
       const result = await response.json();
       
@@ -97,8 +131,20 @@ export default function Dashboard() {
       refetchTasks();
       refetchSentiment();
       refetchVolume();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Sync error:', error);
+      
+      if (error.message?.includes('401') || error.message?.includes('403')) {
+        toast({
+          title: "Authentication Failed",
+          description: "Please sign in again with Microsoft.",
+          variant: "destructive",
+        });
+        AuthManager.logout();
+        window.location.href = '/login';
+        return;
+      }
+      
       toast({
         title: "Sync Failed",
         description: "Failed to sync emails. Please try again.",
@@ -145,10 +191,23 @@ export default function Dashboard() {
                   </span>
                 </Button>
               </div>
+              {!AuthManager.isAuthenticated() && (
+                <Button 
+                  onClick={() => {
+                    AuthManager.logout();
+                    window.location.href = '/login';
+                  }}
+                  variant="outline"
+                  className="border-red-200 text-red-600 hover:bg-red-50"
+                >
+                  <i className="fas fa-exclamation-triangle mr-2"></i>
+                  Fix Authentication
+                </Button>
+              )}
               <Button 
                 onClick={handleSyncEmails}
-                disabled={isSyncing}
-                className="bg-blue-500 hover:bg-blue-600 text-white"
+                disabled={isSyncing || !AuthManager.isAuthenticated()}
+                className="bg-blue-500 hover:bg-blue-600 text-white disabled:bg-gray-400"
               >
                 {isSyncing ? (
                   <>
