@@ -2,6 +2,18 @@ import { Link, useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { AuthManager } from '@/lib/auth';
 import { AuthUser } from '@/lib/types';
+import { useState } from 'react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 
 interface SidebarProps {
   user: AuthUser;
@@ -9,10 +21,25 @@ interface SidebarProps {
 
 export function Sidebar({ user }: SidebarProps) {
   const [location, setLocation] = useLocation();
+  const [isSigningOut, setIsSigningOut] = useState(false);
 
-  const handleLogout = () => {
-    AuthManager.logout();
-    setLocation('/login');
+  const handleLogout = async () => {
+    setIsSigningOut(true);
+    try {
+      // Clear authentication state
+      AuthManager.logout();
+      
+      // Clear all local storage and session storage
+      localStorage.clear();
+      sessionStorage.clear();
+      
+      // Redirect to login
+      setLocation('/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+    } finally {
+      setIsSigningOut(false);
+    }
   };
 
   const getInitials = (name?: string) => {
@@ -73,14 +100,36 @@ export function Sidebar({ user }: SidebarProps) {
             </p>
             <p className="text-xs text-gray-500">{user.role || 'Employee'}</p>
           </div>
-          <Button
-            onClick={handleLogout}
-            variant="ghost"
-            size="sm"
-            className="text-gray-400 hover:text-gray-600"
-          >
-            <i className="fas fa-sign-out-alt"></i>
-          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-gray-400 hover:text-gray-600"
+                disabled={isSigningOut}
+              >
+                {isSigningOut ? (
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400"></div>
+                ) : (
+                  <i className="fas fa-sign-out-alt"></i>
+                )}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Sign Out</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Are you sure you want to sign out? You'll need to authenticate with Microsoft again to access your email analytics.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={handleLogout} className="bg-red-600 hover:bg-red-700">
+                  Sign Out
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
     </aside>

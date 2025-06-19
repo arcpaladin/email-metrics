@@ -227,6 +227,19 @@ export default function Dashboard() {
                   </>
                 )}
               </Button>
+              <Button 
+                onClick={() => {
+                  AuthManager.logout();
+                  localStorage.clear();
+                  sessionStorage.clear();
+                  window.location.href = '/login';
+                }}
+                variant="outline"
+                className="border-gray-300 text-gray-700 hover:bg-gray-50"
+              >
+                <i className="fas fa-sign-out-alt mr-2"></i>
+                Sign Out
+              </Button>
             </div>
           </div>
         </header>
