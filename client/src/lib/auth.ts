@@ -21,7 +21,9 @@ export class AuthManager {
   }
 
   static isAuthenticated(): boolean {
-    return !!this.getToken();
+    const token = this.getToken();
+    const user = this.getUser();
+    return !!(token && user);
   }
 
   static logout() {

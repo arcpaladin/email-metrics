@@ -28,6 +28,15 @@ export default function Dashboard() {
 
   useEffect(() => {
     const currentUser = AuthManager.getUser();
+    const token = AuthManager.getToken();
+    
+    // If we have a user but no token, or vice versa, clear both and redirect to login
+    if ((currentUser && !token) || (!currentUser && token)) {
+      AuthManager.logout();
+      window.location.href = '/login';
+      return;
+    }
+    
     setUser(currentUser);
   }, []);
 
