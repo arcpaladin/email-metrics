@@ -3,50 +3,50 @@
 # Simple AWS EC2 Deployment for Email Analytics Dashboard with RDS
 set -e
 
-# Configuration
-REGION="us-east-1"
-INSTANCE_TYPE="t3.micro"
-KEY_NAME="email-analytics"
-AMI_ID="ami-0c02fb55956c7d316"  # Amazon Linux 2023
-DB_INSTANCE_CLASS="db.t3.micro"
-DB_NAME="emailanalytics"
-DB_USERNAME="admin"
-DB_PASSWORD="EmailAnalytics123!"
+# Load configuration from .env file
+if [ ! -f ".env" ]; then
+    cat > .env << 'EOF'
+# AWS Configuration
+REGION=us-east-1
+INSTANCE_TYPE=t3.micro
+KEY_NAME=email-analytics
+AMI_ID=ami-0c02fb55956c7d316
+
+# RDS Configuration
+DB_INSTANCE_CLASS=db.t3.micro
+DB_NAME=emailanalytics
+DB_USERNAME=admin
+DB_PASSWORD=EmailAnalytics123!
+
+# Application Configuration
+NODE_ENV=production
+PORT=80
+JWT_SECRET=your-jwt-secret-change-this
+EOF
+    echo "Created .env file with default configuration"
+fi
+
+# Load environment variables
+export $(grep -v '^#' .env | xargs)
 
 echo "Deploying Email Analytics Dashboard with PostgreSQL RDS..."
+echo "Region: $REGION"
+echo "Database: $DB_NAME"
 
 # Check AWS CLI
 if ! command -v aws &> /dev/null; then
-    echo "❌ AWS CLI not found. Install it first: https://aws.amazon.com/cli/"
+    echo "AWS CLI not found. Install it first: https://aws.amazon.com/cli/"
     exit 1
 fi
 
-# Create key pair if it doesn't exist
-if ! aws ec2 describe-key-pairs --key-names $KEY_NAME --region $REGION &>/dev/null; then
-    echo "🔑 Creating key pair..."
-    aws ec2 create-key-pair --key-name $KEY_NAME --region $REGION --query 'KeyMaterial' --output text > ${KEY_NAME}.pem
-    chmod 400 ${KEY_NAME}.pem
-    echo "✅ Key saved as ${KEY_NAME}.pem"
-fi
+echo "Step 1: Creating database infrastructure..."
 
-# Create security group
-echo "🛡️ Creating security group..."
-SG_ID=$(aws ec2 create-security-group \
-    --group-name email-analytics \
-    --description "Email Analytics Dashboard" \
-    --region $REGION \
-    --query 'GroupId' --output text 2>/dev/null || \
-    aws ec2 describe-security-groups --group-names email-analytics --region $REGION --query 'SecurityGroups[0].GroupId' --output text)
-
-# Add rules for web server
-aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 22 --cidr 0.0.0.0/0 --region $REGION 2>/dev/null || true
-aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 80 --cidr 0.0.0.0/0 --region $REGION 2>/dev/null || true
-
-# Create RDS subnet group
-echo "📊 Creating RDS subnet group..."
+# Get VPC info for RDS
 VPC_ID=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --region $REGION --query 'Vpcs[0].VpcId' --output text)
 SUBNET_IDS=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$VPC_ID" --region $REGION --query 'Subnets[*].SubnetId' --output text)
 
+# Create RDS subnet group
+echo "Creating RDS subnet group..."
 aws rds create-db-subnet-group \
     --db-subnet-group-name email-analytics-subnet-group \
     --db-subnet-group-description "Subnet group for Email Analytics RDS" \
@@ -54,7 +54,7 @@ aws rds create-db-subnet-group \
     --region $REGION 2>/dev/null || true
 
 # Create RDS security group
-echo "🔒 Creating RDS security group..."
+echo "Creating RDS security group..."
 RDS_SG_ID=$(aws ec2 create-security-group \
     --group-name email-analytics-rds \
     --description "RDS PostgreSQL for Email Analytics" \
@@ -63,16 +63,16 @@ RDS_SG_ID=$(aws ec2 create-security-group \
     --query 'GroupId' --output text 2>/dev/null || \
     aws ec2 describe-security-groups --group-names email-analytics-rds --region $REGION --query 'SecurityGroups[0].GroupId' --output text)
 
-# Allow PostgreSQL access from EC2 security group
+# Allow PostgreSQL access (will add EC2 security group later)
 aws ec2 authorize-security-group-ingress \
     --group-id $RDS_SG_ID \
     --protocol tcp \
     --port 5432 \
-    --source-group $SG_ID \
+    --cidr 10.0.0.0/8 \
     --region $REGION 2>/dev/null || true
 
 # Create RDS instance
-echo "💾 Creating RDS PostgreSQL instance..."
+echo "Creating PostgreSQL database (this takes 5-10 minutes)..."
 DB_IDENTIFIER="email-analytics-db"
 aws rds create-db-instance \
     --db-instance-identifier $DB_IDENTIFIER \
@@ -91,7 +91,7 @@ aws rds create-db-instance \
     --publicly-accessible \
     --region $REGION 2>/dev/null || true
 
-echo "⏳ Waiting for RDS instance to be available..."
+echo "Waiting for database to be available..."
 aws rds wait db-instance-available --db-instance-identifier $DB_IDENTIFIER --region $REGION
 
 # Get RDS endpoint
@@ -100,7 +100,40 @@ DB_ENDPOINT=$(aws rds describe-db-instances \
     --region $REGION \
     --query 'DBInstances[0].Endpoint.Address' --output text)
 
-echo "✅ RDS PostgreSQL ready at: $DB_ENDPOINT"
+echo "Database ready at: $DB_ENDPOINT"
+
+echo "Step 2: Creating EC2 infrastructure..."
+
+# Create key pair if it doesn't exist
+if ! aws ec2 describe-key-pairs --key-names $KEY_NAME --region $REGION &>/dev/null; then
+    echo "Creating key pair..."
+    aws ec2 create-key-pair --key-name $KEY_NAME --region $REGION --query 'KeyMaterial' --output text > ${KEY_NAME}.pem
+    chmod 400 ${KEY_NAME}.pem
+    echo "Key saved as ${KEY_NAME}.pem"
+fi
+
+# Create EC2 security group
+echo "Creating EC2 security group..."
+SG_ID=$(aws ec2 create-security-group \
+    --group-name email-analytics \
+    --description "Email Analytics Dashboard" \
+    --region $REGION \
+    --query 'GroupId' --output text 2>/dev/null || \
+    aws ec2 describe-security-groups --group-names email-analytics --region $REGION --query 'SecurityGroups[0].GroupId' --output text)
+
+# Add rules for web server
+aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 22 --cidr 0.0.0.0/0 --region $REGION 2>/dev/null || true
+aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 80 --cidr 0.0.0.0/0 --region $REGION 2>/dev/null || true
+
+# Update RDS security group to allow access from EC2
+aws ec2 authorize-security-group-ingress \
+    --group-id $RDS_SG_ID \
+    --protocol tcp \
+    --port 5432 \
+    --source-group $SG_ID \
+    --region $REGION 2>/dev/null || true
+
+echo "Step 3: Deploying application..."
 
 # Create user data script with database connection
 cat > userdata.sh << EOF
@@ -154,12 +187,12 @@ cat > package.json << 'JSONEOF'
 }
 JSONEOF
 
-# Create environment file
+# Create environment file with actual database connection
 cat > .env << ENVEOF
 DATABASE_URL=postgresql://$DB_USERNAME:$DB_PASSWORD@$DB_ENDPOINT:5432/$DB_NAME
-NODE_ENV=production
-PORT=80
-JWT_SECRET=your-jwt-secret-change-this
+NODE_ENV=$NODE_ENV
+PORT=$PORT
+JWT_SECRET=$JWT_SECRET
 ENVEOF
 
 # Create basic server with database health check
@@ -295,8 +328,8 @@ pm2 save
 echo "✅ Email Analytics application deployed with PostgreSQL RDS"
 EOF
 
-# Launch instance
-echo "🚀 Launching EC2 instance..."
+# Launch EC2 instance
+echo "Launching EC2 instance..."
 INSTANCE_ID=$(aws ec2 run-instances \
     --image-id $AMI_ID \
     --count 1 \
@@ -308,7 +341,7 @@ INSTANCE_ID=$(aws ec2 run-instances \
     --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=email-analytics}]" \
     --query 'Instances[0].InstanceId' --output text)
 
-echo "⏳ Waiting for instance to start..."
+echo "Waiting for instance to start..."
 aws ec2 wait instance-running --instance-ids $INSTANCE_ID --region $REGION
 
 # Get public IP
@@ -317,23 +350,35 @@ PUBLIC_IP=$(aws ec2 describe-instances \
     --region $REGION \
     --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
 
+echo "Instance ready at: $PUBLIC_IP"
+
 # Cleanup
 rm -f userdata.sh
 
-echo "✅ Deployment completed!"
+# Save deployment information to .env for future reference
+cat >> .env << ENVEOF
+
+# Deployment Information (Generated)
+DB_ENDPOINT=$DB_ENDPOINT
+INSTANCE_ID=$INSTANCE_ID
+PUBLIC_IP=$PUBLIC_IP
+DEPLOYMENT_DATE=$(date)
+ENVEOF
+
+echo "Deployment completed!"
 echo
-echo "🌐 Application: http://$PUBLIC_IP"
-echo "🔍 Health check: http://$PUBLIC_IP/health"
-echo "📱 SSH access: ssh -i ${KEY_NAME}.pem ec2-user@$PUBLIC_IP"
+echo "Application: http://$PUBLIC_IP"
+echo "Health check: http://$PUBLIC_IP/health"
+echo "SSH access: ssh -i ${KEY_NAME}.pem ec2-user@$PUBLIC_IP"
 echo
-echo "📊 Database Info:"
-echo "  - Endpoint: $DB_ENDPOINT"
-echo "  - Database: $DB_NAME"
-echo "  - Username: $DB_USERNAME"
-echo "  - Password: $DB_PASSWORD"
+echo "Database Info:"
+echo "  Endpoint: $DB_ENDPOINT"
+echo "  Database: $DB_NAME"
+echo "  Username: $DB_USERNAME"
 echo
 echo "Instance ID: $INSTANCE_ID"
 echo "Public IP: $PUBLIC_IP"
 echo "Key file: ${KEY_NAME}.pem"
 echo
-echo "💡 Visit your application and click 'Setup Database' to initialize tables"
+echo "Configuration saved to .env file"
+echo "Visit your application and click 'Setup Database' to initialize tables"
