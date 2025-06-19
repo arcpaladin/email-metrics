@@ -4,7 +4,7 @@
 set -e
 
 # Configuration
-REGION="us-east-1"
+REGION="us-east-2"
 APP_NAME="email-analytics"
 
 # Colors for output

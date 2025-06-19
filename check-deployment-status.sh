@@ -3,7 +3,7 @@
 # Deployment Status Checker for Email Analytics Dashboard
 set -e
 
-REGION="us-east-1"
+REGION="us-east-2"
 APP_NAME="email-analytics"
 
 # Colors
