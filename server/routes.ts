@@ -80,9 +80,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       res.json(auth);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Microsoft auth error:', error);
-      res.status(500).json({ error: 'Authentication failed' });
+      
+      if (error.message?.includes('JWT is not well formed')) {
+        return res.status(400).json({ error: 'Invalid access token format' });
+      }
+      
+      if (error.statusCode === 401) {
+        return res.status(401).json({ error: 'Invalid or expired access token' });
+      }
+      
+      res.status(500).json({ 
+        error: 'Authentication failed',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
     }
   });
 
