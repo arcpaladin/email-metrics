@@ -61,7 +61,46 @@ DB_ENDPOINT=$(aws rds describe-db-instances \
 
 echo -e "${GREEN}✓ Database created at: $DB_ENDPOINT${NC}"
 
-# Step 2: Create ECR Repository and Push Docker Image
+# Step 2: Create IAM Role for App Runner
+echo "Creating IAM role for App Runner..."
+
+# Create trust policy for App Runner
+cat > apprunner-trust-policy.json << EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "build.apprunner.amazonaws.com"
+            },
+            "Action": "sts:AssumeRole"
+        }
+    ]
+}
+EOF
+
+# Create the IAM role
+aws iam create-role \
+    --role-name "${APP_NAME}-apprunner-access-role" \
+    --assume-role-policy-document file://apprunner-trust-policy.json \
+    2>/dev/null || echo "Role may already exist"
+
+# Attach the App Runner service policy
+aws iam attach-role-policy \
+    --role-name "${APP_NAME}-apprunner-access-role" \
+    --policy-arn arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess \
+    2>/dev/null || echo "Policy may already be attached"
+
+# Get the role ARN
+APPRUNNER_ROLE_ARN=$(aws iam get-role \
+    --role-name "${APP_NAME}-apprunner-access-role" \
+    --query 'Role.Arn' \
+    --output text)
+
+echo -e "${GREEN}✓ App Runner IAM role created: $APPRUNNER_ROLE_ARN${NC}"
+
+# Step 3: Create ECR Repository and Push Docker Image
 echo "Setting up container registry..."
 
 # Create ECR repository
@@ -88,7 +127,7 @@ docker push "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/${APP_NAME}-backend:lates
 
 echo -e "${GREEN}✓ Docker image pushed to ECR${NC}"
 
-# Step 3: Create App Runner Service Configuration
+# Step 4: Create App Runner Service Configuration
 cat > apprunner-service.json << EOF
 {
     "ServiceName": "${APP_NAME}-backend",
@@ -106,6 +145,9 @@ cat > apprunner-service.json << EOF
                 }
             },
             "ImageRepositoryType": "ECR"
+        },
+        "AuthenticationConfiguration": {
+            "AccessRoleArn": "$APPRUNNER_ROLE_ARN"
         },
         "AutoDeploymentsEnabled": true
     },
@@ -150,6 +192,9 @@ if [ -n "$SERVICE_ARN" ]; then
                 }
             },
             "ImageRepositoryType": "ECR"
+        },
+        "AuthenticationConfiguration": {
+            "AccessRoleArn": "$APPRUNNER_ROLE_ARN"
         }
     }
 }
@@ -283,6 +328,6 @@ ${GREEN}=== DEPLOYMENT COMPLETE ===${NC}
 EOF
 
 # Clean up temporary files
-rm -f apprunner-service.json
+rm -f apprunner-service.json apprunner-trust-policy.json
 
 echo -e "${GREEN}✓ Deployment script completed successfully!${NC}"
