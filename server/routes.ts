@@ -27,6 +27,10 @@ const authenticateToken = (req: any, res: any, next: any) => {
 };
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Health check endpoint for App Runner
+  app.get("/api/health", (_req, res) => {
+    res.status(200).json({ status: "healthy", timestamp: new Date().toISOString() });
+  });
   // Authentication routes
   app.post('/api/auth/microsoft', async (req, res) => {
     try {

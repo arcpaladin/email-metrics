@@ -417,7 +417,9 @@ EOF
                 "Port": "5000",
                 "RuntimeEnvironmentVariables": {
                     "NODE_ENV": "production",
-                    "PORT": "5000"
+                    "PORT": "5000",
+                    "DATABASE_URL": "postgresql://dbadmin:$DB_PASSWORD@$DB_ENDPOINT_CURRENT:5432/emailanalytics",
+                    "JWT_SECRET": "production-jwt-secret-2024-secure-token"
                 }
             },
             "ImageRepositoryType": "ECR"
@@ -430,6 +432,14 @@ EOF
     "InstanceConfiguration": {
         "Cpu": "0.25 vCPU",
         "Memory": "0.5 GB"
+    },
+    "HealthCheckConfiguration": {
+        "Protocol": "HTTP",
+        "Path": "/api/health",
+        "Interval": 10,
+        "Timeout": 5,
+        "HealthyThreshold": 1,
+        "UnhealthyThreshold": 5
     }
 }
 EOF
@@ -437,16 +447,40 @@ EOF
     # Clean up temporary files
     rm -f apprunner-trust-policy.json
     
-    # Create App Runner service with error handling
-    if aws apprunner create-service --cli-input-json file://apprunner-config.json --region $REGION; then
-        echo -e "${GREEN}✓ App Runner service created successfully${NC}"
+    # Check if App Runner service exists and create or update
+    SERVICE_ARN=$(aws apprunner list-services \
+        --region $REGION \
+        --query "ServiceSummaryList[?ServiceName=='${APP_NAME}-backend'].ServiceArn" \
+        --output text)
+    
+    if [ -n "$SERVICE_ARN" ]; then
+        echo "App Runner service exists. Updating configuration..."
         
-        # Wait for service to be running
-        echo "Waiting for App Runner service to start..."
-        SERVICE_ARN=$(aws apprunner list-services \
-            --region $REGION \
-            --query "ServiceSummaryList[?ServiceName=='${APP_NAME}-backend'].ServiceArn" \
-            --output text)
+        # Update the service with new image and configuration
+        aws apprunner update-service \
+            --service-arn "$SERVICE_ARN" \
+            --source-configuration ImageRepository="{ImageIdentifier=$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/${APP_NAME}-backend:latest,ImageConfiguration={Port=5000,RuntimeEnvironmentVariables={NODE_ENV=production,PORT=5000,DATABASE_URL=postgresql://dbadmin:$DB_PASSWORD@$DB_ENDPOINT_CURRENT:5432/emailanalytics,JWT_SECRET=production-jwt-secret-2024-secure-token}},ImageRepositoryType=ECR}" \
+            --health-check-configuration Protocol=HTTP,Path=/api/health,Interval=10,Timeout=5,HealthyThreshold=1,UnhealthyThreshold=5 \
+            --region $REGION
+        
+        echo -e "${GREEN}✓ App Runner service updated successfully${NC}"
+    else
+        # Create new service
+        if aws apprunner create-service --cli-input-json file://apprunner-config.json --region $REGION; then
+            echo -e "${GREEN}✓ App Runner service created successfully${NC}"
+            
+            SERVICE_ARN=$(aws apprunner list-services \
+                --region $REGION \
+                --query "ServiceSummaryList[?ServiceName=='${APP_NAME}-backend'].ServiceArn" \
+                --output text)
+        else
+            echo -e "${RED}✗ Failed to create App Runner service${NC}"
+            exit 1
+        fi
+    fi
+    
+    # Wait for service to be running
+    echo "Waiting for App Runner service to start..."
         
         # Get service URL
         sleep 30

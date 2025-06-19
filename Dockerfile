@@ -29,6 +29,9 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=5000
 
+# Install curl for health checks
+RUN apk add --no-cache curl
+
 # Create non-root user
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nodejs
@@ -43,5 +46,9 @@ COPY --from=builder --chown=nodejs:nodejs /app/package.json ./package.json
 USER nodejs
 
 EXPOSE 5000
+
+# Add health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:5000/api/health || exit 1
 
 CMD ["npm", "start"]
