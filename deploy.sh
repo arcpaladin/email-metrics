@@ -16,6 +16,22 @@ echo "Deploying Email Analytics Dashboard with PostgreSQL RDS..."
 echo "Region: $REGION"
 echo "Database: $DB_NAME"
 
+# Get the latest Amazon Linux 2023 AMI ID for the region
+echo "Finding latest Amazon Linux 2023 AMI..."
+LATEST_AMI=$(aws ec2 describe-images \
+    --owners amazon \
+    --filters "Name=name,Values=al2023-ami-2023*" "Name=architecture,Values=x86_64" \
+    --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
+    --output text \
+    --region $REGION)
+
+if [ "$LATEST_AMI" != "None" ] && [ ! -z "$LATEST_AMI" ]; then
+    echo "Using latest AMI: $LATEST_AMI"
+    AMI_ID=$LATEST_AMI
+else
+    echo "Using configured AMI: $AMI_ID"
+fi
+
 # Check AWS CLI
 if ! command -v aws &> /dev/null; then
     echo "AWS CLI not found. Install it first: https://aws.amazon.com/cli/"
