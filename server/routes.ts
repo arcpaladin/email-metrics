@@ -37,14 +37,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Authentication routes
   app.post('/api/auth/microsoft', async (req, res) => {
     try {
+      console.log('Microsoft auth request received');
       const { accessToken } = req.body;
       
       if (!accessToken) {
+        console.log('No access token provided');
         return res.status(400).json({ error: 'Access token required' });
       }
 
+      console.log('Creating GraphService with access token');
       const graphService = new GraphService(accessToken);
+      
+      console.log('Fetching current user from Microsoft Graph');
       const graphUser = await graphService.getCurrentUser();
+      console.log('Microsoft Graph user:', { id: graphUser.id, mail: graphUser.mail, displayName: graphUser.displayName });
       
       if (!graphUser.mail) {
         return res.status(400).json({ error: 'No email found in user profile' });

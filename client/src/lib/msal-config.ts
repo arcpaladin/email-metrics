@@ -22,9 +22,7 @@ export const msalConfig: Configuration = {
     cacheLocation: 'localStorage',
     storeAuthStateInCookie: false,
   },
-  system: {
-    allowNativeBroker: false, // Disable WAM Broker
-  },
+
 };
 
 export const loginRequest = {
