@@ -10,9 +10,7 @@ if [ ! -f ".env" ]; then
 fi
 
 # Load environment variables from .env file
-set -a
-source .env
-set +a
+export $(grep -v '^#' .env | grep -v '^$' | xargs)
 
 echo "Deploying Email Analytics Dashboard with PostgreSQL RDS..."
 echo "Region: $REGION"
