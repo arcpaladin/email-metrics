@@ -126,22 +126,36 @@ aws ec2 authorize-security-group-ingress \
 # Create RDS instance
 echo "Creating PostgreSQL database (this takes 5-10 minutes)..."
 DB_IDENTIFIER="email-analytics-db"
-aws rds create-db-instance \
-    --db-instance-identifier $DB_IDENTIFIER \
-    --db-instance-class $DB_INSTANCE_CLASS \
-    --engine postgres \
-    --engine-version 15.4 \
-    --master-username $DB_USERNAME \
-    --master-user-password $DB_PASSWORD \
-    --allocated-storage 20 \
-    --storage-type gp2 \
-    --vpc-security-group-ids $RDS_SG_ID \
-    --db-subnet-group-name email-analytics-subnet-group \
-    --db-name $DB_NAME \
-    --backup-retention-period 7 \
-    --no-multi-az \
-    --publicly-accessible \
-    --region $REGION 2>/dev/null || true
+
+# Check if database already exists
+if aws rds describe-db-instances --db-instance-identifier $DB_IDENTIFIER --region $REGION &>/dev/null; then
+    echo "Database instance already exists, skipping creation..."
+else
+    echo "Creating new database instance..."
+    aws rds create-db-instance \
+        --db-instance-identifier $DB_IDENTIFIER \
+        --db-instance-class $DB_INSTANCE_CLASS \
+        --engine postgres \
+        --engine-version 15.7 \
+        --master-username $DB_USERNAME \
+        --master-user-password $DB_PASSWORD \
+        --allocated-storage 20 \
+        --storage-type gp2 \
+        --vpc-security-group-ids $RDS_SG_ID \
+        --db-subnet-group-name email-analytics-subnet-group \
+        --db-name $DB_NAME \
+        --backup-retention-period 7 \
+        --no-multi-az \
+        --publicly-accessible \
+        --region $REGION
+    
+    if [ $? -eq 0 ]; then
+        echo "Database creation initiated successfully"
+    else
+        echo "Failed to create database instance"
+        exit 1
+    fi
+fi
 
 echo "Waiting for database to be available..."
 aws rds wait db-instance-available --db-instance-identifier $DB_IDENTIFIER --region $REGION
