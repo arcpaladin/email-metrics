@@ -47,10 +47,8 @@ Enterprise-grade email analytics platform that transforms complex email communic
 Deploy to AWS using the automated script:
 
 ```bash
-./deploy-simple.sh
+./deploy-aws.sh
 ```
-
-Or follow the detailed deployment guide in `DEPLOYMENT_GUIDE.md`.
 
 ## Configuration
 
@@ -131,7 +129,7 @@ Frontend (React/Amplify) → Backend API (Express/App Runner) → Database (Post
 
 ## Deployment Scripts
 
-- `./deploy-simple.sh` - Automated AWS deployment
+- `./deploy-aws.sh` - Automated AWS deployment
 - `./check-deployment-status.sh` - Check deployment status
 - `./setup-local-https.sh` - Set up local HTTPS for development
 
