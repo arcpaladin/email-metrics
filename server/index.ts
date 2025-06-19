@@ -67,8 +67,18 @@ app.use((req, res, next) => {
   // It is the only port that is not firewalled.
   const port = process.env.PORT;
   
-  // Configure HTTPS for development (Microsoft auth requires HTTPS)
+  // In development, run both HTTP and HTTPS servers
   if (app.get("env") === "development") {
+    // Start HTTP server on main port
+    server.listen({
+      port,
+      host: "0.0.0.0",
+      reusePort: true,
+    }, () => {
+      log(`serving on port ${port}`);
+    });
+    
+    // Try to start HTTPS server on port 5001 for Microsoft auth
     try {
       const httpsOptions = {
         key: fs.readFileSync(path.resolve("key.pem")),
@@ -77,21 +87,14 @@ app.use((req, res, next) => {
       
       const httpsServer = https.createServer(httpsOptions, app);
       httpsServer.listen({
-        port,
+        port: 5001,
         host: "0.0.0.0",
         reusePort: true,
       }, () => {
-        log(`serving on https://localhost:${port}`);
+        log(`serving HTTPS on port 5001 for Microsoft auth`);
       });
     } catch (error) {
-      log("HTTPS certificates not found, falling back to HTTP");
-      server.listen({
-        port,
-        host: "0.0.0.0",
-        reusePort: true,
-      }, () => {
-        log(`serving on port ${port}`);
-      });
+      log("HTTPS certificates not found, skipping HTTPS server");
     }
   } else {
     server.listen({
