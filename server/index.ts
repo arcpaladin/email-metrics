@@ -2,6 +2,9 @@
 import "./env";
 
 import express, { type Request, Response, NextFunction } from "express";
+import https from "https";
+import fs from "fs";
+import path from "path";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
@@ -63,11 +66,40 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = process.env.PORT;
-  server.listen({
-    port,
-    host: "0.0.0.0",
-    reusePort: true,
-  }, () => {
-    log(`serving on port ${port}`);
-  });
+  
+  // Configure HTTPS for development (Microsoft auth requires HTTPS)
+  if (app.get("env") === "development") {
+    try {
+      const httpsOptions = {
+        key: fs.readFileSync(path.resolve("key.pem")),
+        cert: fs.readFileSync(path.resolve("cert.pem")),
+      };
+      
+      const httpsServer = https.createServer(httpsOptions, app);
+      httpsServer.listen({
+        port,
+        host: "0.0.0.0",
+        reusePort: true,
+      }, () => {
+        log(`serving on https://localhost:${port}`);
+      });
+    } catch (error) {
+      log("HTTPS certificates not found, falling back to HTTP");
+      server.listen({
+        port,
+        host: "0.0.0.0",
+        reusePort: true,
+      }, () => {
+        log(`serving on port ${port}`);
+      });
+    }
+  } else {
+    server.listen({
+      port,
+      host: "0.0.0.0",
+      reusePort: true,
+    }, () => {
+      log(`serving on port ${port}`);
+    });
+  }
 })();
