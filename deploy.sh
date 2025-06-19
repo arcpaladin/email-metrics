@@ -3,31 +3,16 @@
 # Simple AWS EC2 Deployment for Email Analytics Dashboard with RDS
 set -e
 
-# Load configuration from .env file
+# Check if .env file exists
 if [ ! -f ".env" ]; then
-    cat > .env << 'EOF'
-# AWS Configuration
-REGION=us-east-1
-INSTANCE_TYPE=t3.micro
-KEY_NAME=email-analytics
-AMI_ID=ami-0c02fb55956c7d316
-
-# RDS Configuration
-DB_INSTANCE_CLASS=db.t3.micro
-DB_NAME=emailanalytics
-DB_USERNAME=admin
-DB_PASSWORD=EmailAnalytics123!
-
-# Application Configuration
-NODE_ENV=production
-PORT=80
-JWT_SECRET=your-jwt-secret-change-this
-EOF
-    echo "Created .env file with default configuration"
+    echo "Error: .env file not found. Please create one with your configuration."
+    exit 1
 fi
 
-# Load environment variables
-export $(grep -v '^#' .env | xargs)
+# Load environment variables from .env file
+set -a
+source .env
+set +a
 
 echo "Deploying Email Analytics Dashboard with PostgreSQL RDS..."
 echo "Region: $REGION"
