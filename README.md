@@ -66,17 +66,24 @@ JWT_SECRET=your-jwt-secret-key
 npm install
 ```
 
-2. Set up database:
+2. Set up HTTPS for local development (required for Microsoft authentication):
+```bash
+./setup-local-https.sh
+```
+
+3. Set up database:
 ```bash
 npm run db:push
 ```
 
-3. Start development server:
+4. Start development server:
 ```bash
 npm run dev
 ```
 
-The application will be available at `http://localhost:5000`
+The application will be available at:
+- HTTP: `http://localhost:5000` (general access)
+- HTTPS: `https://localhost:5001` (Microsoft authentication)
 
 ## AWS Deployment
 
