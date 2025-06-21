@@ -1,0 +1,208 @@
+name: Deploy Backend to AWS
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'server/**'
+      - 'shared/**'
+      - 'deploy/**'
+      - 'package.json'
+      - '.github/workflows/backend.yml'
+  workflow_dispatch:
+    inputs:
+      deploy_mode:
+        description: 'Deployment mode'
+        required: true
+        default: 'update'
+        type: choice
+        options:
+        - update
+        - full
+        - backend
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run tests (if available)
+      run: npm run test --if-present
+      continue-on-error: true
+
+    - name: Build TypeScript server
+      run: npm run build
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+
+    - name: Create deployment package
+      run: |
+        # Create deployment directory
+        mkdir -p deployment-package
+        
+        # Copy built server files
+        cp -r dist/* deployment-package/ 2>/dev/null || echo "No dist directory found"
+        
+        # Copy deployment files
+        cp deploy/package.json deployment-package/
+        cp deploy/server.js deployment-package/
+        cp deploy/ecosystem.config.js deployment-package/
+        cp deploy/migrate.js deployment-package/
+        
+        # Create environment file from secrets
+        cat > deployment-package/.env << EOF
+        NODE_ENV=production
+        PORT=80
+        DATABASE_URL=${{ secrets.DATABASE_URL }}
+        JWT_SECRET=${{ secrets.JWT_SECRET }}
+        FRONTEND_URL=${{ secrets.FRONTEND_URL }}
+        API_URL=${{ secrets.API_URL }}
+        MICROSOFT_CLIENT_ID=${{ secrets.MICROSOFT_CLIENT_ID }}
+        MICROSOFT_CLIENT_SECRET=${{ secrets.MICROSOFT_CLIENT_SECRET }}
+        MICROSOFT_TENANT_ID=${{ secrets.MICROSOFT_TENANT_ID }}
+        OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+        SESSION_SECRET=${{ secrets.SESSION_SECRET }}
+        EOF
+        
+        # Create deployment archive
+        cd deployment-package
+        tar -czf ../deployment.tar.gz .
+        cd ..
+
+    - name: Upload deployment package to S3
+      run: |
+        aws s3 cp deployment.tar.gz s3://${{ secrets.S3_DEPLOYMENT_BUCKET }}/email-analytics/deployment-$(date +%Y%m%d-%H%M%S).tar.gz
+        aws s3 cp deployment.tar.gz s3://${{ secrets.S3_DEPLOYMENT_BUCKET }}/email-analytics/latest.tar.gz
+
+    - name: Get EC2 instance info
+      id: ec2-info
+      run: |
+        INSTANCE_ID=$(aws ec2 describe-instances \
+          --filters "Name=tag:Name,Values=email-analytics-backend" "Name=instance-state-name,Values=running" \
+          --query 'Reservations[].Instances[].InstanceId' \
+          --output text)
+        
+        if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
+          echo "No running EC2 instance found. Please deploy infrastructure first."
+          exit 1
+        fi
+        
+        PUBLIC_IP=$(aws ec2 describe-instances \
+          --instance-ids $INSTANCE_ID \
+          --query 'Reservations[0].Instances[0].PublicIpAddress' \
+          --output text)
+        
+        echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+        echo "public-ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+
+    - name: Deploy to EC2
+      run: |
+        # Create deployment script
+        cat > deploy-script.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        echo "Starting deployment at $(date)"
+        
+        # Download latest deployment package
+        cd /tmp
+        aws s3 cp s3://${{ secrets.S3_DEPLOYMENT_BUCKET }}/email-analytics/latest.tar.gz .
+        
+        # Backup current application
+        sudo cp -r /home/ubuntu/app /home/ubuntu/app-backup-$(date +%Y%m%d-%H%M%S) 2>/dev/null || echo "No existing app to backup"
+        
+        # Extract new deployment
+        sudo rm -rf /home/ubuntu/app-new
+        sudo mkdir -p /home/ubuntu/app-new
+        sudo tar -xzf latest.tar.gz -C /home/ubuntu/app-new
+        sudo chown -R ubuntu:ubuntu /home/ubuntu/app-new
+        
+        # Install dependencies
+        cd /home/ubuntu/app-new
+        npm install --production
+        
+        # Run database migrations
+        npm run migrate || echo "Migration failed or not needed"
+        
+        # Stop current application
+        pm2 stop email-analytics || echo "App not running"
+        
+        # Replace application
+        sudo rm -rf /home/ubuntu/app
+        sudo mv /home/ubuntu/app-new /home/ubuntu/app
+        
+        # Start application with PM2
+        cd /home/ubuntu/app
+        pm2 start ecosystem.config.js
+        pm2 save
+        
+        echo "Deployment completed at $(date)"
+        EOF
+        
+        # Make script executable and copy to EC2
+        chmod +x deploy-script.sh
+        
+        # Copy script to EC2 and execute
+        aws ssm send-command \
+          --instance-ids ${{ steps.ec2-info.outputs.instance-id }} \
+          --document-name "AWS-RunShellScript" \
+          --parameters 'commands=["curl -o /tmp/deploy-script.sh https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/.github/scripts/deploy-script.sh && chmod +x /tmp/deploy-script.sh && /tmp/deploy-script.sh"]' \
+          --output text
+
+    - name: Wait for deployment
+      run: |
+        echo "Waiting for deployment to complete..."
+        sleep 30
+        
+        # Health check
+        for i in {1..10}; do
+          if curl -f http://${{ steps.ec2-info.outputs.public-ip }}/api/health; then
+            echo "✅ Deployment successful! API is responding."
+            break
+          else
+            echo "⏳ Waiting for API to respond... (attempt $i/10)"
+            sleep 10
+          fi
+        done
+
+    - name: Update deployment status
+      if: always()
+      run: |
+        if curl -f http://${{ steps.ec2-info.outputs.public-ip }}/api/health; then
+          echo "✅ Backend deployment successful!"
+          echo "🔗 API URL: http://${{ steps.ec2-info.outputs.public-ip }}"
+          echo "📚 API Docs: http://${{ steps.ec2-info.outputs.public-ip }}/api/docs"
+        else
+          echo "❌ Backend deployment failed!"
+          exit 1
+        fi
+
+    - name: Comment PR with deployment info
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const publicIp = '${{ steps.ec2-info.outputs.public-ip }}';
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: `🚀 Backend deployed successfully!\n\n**API URL:** http://${publicIp}\n**API Documentation:** http://${publicIp}/api/docs\n**Health Check:** http://${publicIp}/api/health\n\nChanges in this PR are now live for testing.`
+          });

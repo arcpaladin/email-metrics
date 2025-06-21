@@ -1,0 +1,31 @@
+{
+  "name": "email-analytics-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "migrate": "node migrate.js"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.4",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "dotenv": "^16.5.0",
+    "drizzle-orm": "^0.39.1",
+    "drizzle-zod": "^0.7.0",
+    "jsonwebtoken": "^9.0.2",
+    "openai": "^5.5.0",
+    "ws": "^8.18.0",
+    "zod": "^3.24.2",
+    "zod-validation-error": "^3.4.0",
+    "@microsoft/microsoft-graph-client": "^3.0.7",
+    "nanoid": "^5.1.5",
+    "passport": "^0.7.0",
+    "passport-local": "^1.0.0",
+    "memorystore": "^1.6.7",
+    "connect-pg-simple": "^10.0.0",
+    "swagger-ui-express": "^5.0.0",
+    "swagger-jsdoc": "^6.2.8"
+  }
+}
