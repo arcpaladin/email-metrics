@@ -102,3 +102,4 @@ yarn.lock
 
 # SSL certificates for local development
 *.pem
+.vercel
