@@ -9,6 +9,33 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
 const app = express();
+
+// CORS configuration
+app.use((req, res, next) => {
+  const allowedOrigins = [
+    'https://email-metrics-taupe.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://localhost:5001'
+  ];
+  
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin as string)) {
+    res.setHeader('Access-Control-Allow-Origin', origin as string);
+  }
+  
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+    return;
+  }
+  
+  next();
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
@@ -72,7 +99,6 @@ app.use((req, res, next) => {
     // Start HTTP server on main port
     server.listen({
       port,
-      host: "0.0.0.0",
       reusePort: true,
     }, () => {
       log(`serving on port ${port}`);
@@ -88,7 +114,6 @@ app.use((req, res, next) => {
       const httpsServer = https.createServer(httpsOptions, app);
       httpsServer.listen({
         port: 5001,
-        host: "0.0.0.0",
         reusePort: true,
       }, () => {
         log(`serving HTTPS on port 5001 for Microsoft auth`);
@@ -99,7 +124,6 @@ app.use((req, res, next) => {
   } else {
     server.listen({
       port,
-      host: "0.0.0.0",
       reusePort: true,
     }, () => {
       log(`serving on port ${port}`);

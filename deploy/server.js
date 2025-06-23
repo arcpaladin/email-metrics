@@ -286,7 +286,7 @@ app.use((err, req, res, next) => {
 
 const server = createServer(app);
 
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, () => {
   console.log(`Email Analytics API running on port ${PORT}`);
   console.log(`API Documentation: http://localhost:${PORT}/api/docs`);
   console.log(`Health Check: http://localhost:${PORT}/api/health`);

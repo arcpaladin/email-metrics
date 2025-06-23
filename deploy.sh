@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# AWS EC2 Deployment for Email Analytics Dashboard with RDS
+# AWS EC2 Deployment for Email Analytics Dashboard Backend API
 # Usage: ./deploy.sh [mode]
-# Modes: full, database, backend, update, cleanup
+# Modes: backend, update, cleanup, status
 set -e
 
 # Color codes for output
@@ -13,11 +13,8 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Resource naming constants
-DB_IDENTIFIER="email-analytics-db"
 EC2_TAG_NAME="email-analytics-backend"
 EC2_SG_NAME="email-analytics-ec2-sg"
-RDS_SG_NAME="email-analytics-rds-sg"
-SUBNET_GROUP_NAME="email-analytics-subnet-group"
 
 # Print colored output
 print_status() {
@@ -75,14 +72,6 @@ check_aws_setup() {
     print_info "AWS CLI configured and credentials valid"
 }
 
-# Check if RDS database exists
-check_database_exists() {
-    if aws rds describe-db-instances --db-instance-identifier $DB_IDENTIFIER --region $REGION &>/dev/null; then
-        return 0  # exists
-    else
-        return 1  # doesn't exist
-    fi
-}
 
 # Check if EC2 instance exists
 check_backend_exists() {
@@ -120,81 +109,6 @@ get_backend_public_ip() {
     fi
 }
 
-# Deploy database
-deploy_database() {
-    print_header "Deploying Database"
-
-    if check_database_exists; then
-        print_warning "Database '$DB_IDENTIFIER' already exists, skipping creation..."
-        local db_endpoint=$(aws rds describe-db-instances \
-            --db-instance-identifier $DB_IDENTIFIER \
-            --region $REGION \
-            --query 'DBInstances[0].Endpoint.Address' --output text)
-        print_info "Database endpoint: $db_endpoint"
-        return 0
-    fi
-
-    print_info "Creating database infrastructure..."
-
-    # Get VPC info for RDS
-    local vpc_id=$(aws ec2 describe-vpcs --filters "Name=is-default,Values=true" --region $REGION --query 'Vpcs[0].VpcId' --output text)
-    local subnet_ids=$(aws ec2 describe-subnets --filters "Name=vpc-id,Values=$vpc_id" --region $REGION --query 'Subnets[*].SubnetId' --output text)
-
-    # Create RDS subnet group
-    print_info "Creating RDS subnet group..."
-    aws rds create-db-subnet-group \
-        --db-subnet-group-name $SUBNET_GROUP_NAME \
-        --db-subnet-group-description "Subnet group for Email Analytics RDS" \
-        --subnet-ids $subnet_ids \
-        --region $REGION 2>/dev/null || print_warning "Subnet group may already exist"
-
-    # Create RDS security group
-    print_info "Creating RDS security group..."
-    local rds_sg_id=$(aws ec2 create-security-group \
-        --group-name $RDS_SG_NAME \
-        --description "RDS PostgreSQL for Email Analytics" \
-        --vpc-id $vpc_id \
-        --region $REGION \
-        --query 'GroupId' --output text 2>/dev/null || \
-        aws ec2 describe-security-groups --group-names $RDS_SG_NAME --region $REGION --query 'SecurityGroups[0].GroupId' --output text)
-
-    # Allow PostgreSQL access
-    aws ec2 authorize-security-group-ingress \
-        --group-id $rds_sg_id \
-        --protocol tcp \
-        --port 5432 \
-        --cidr 10.0.0.0/8 \
-        --region $REGION 2>/dev/null || true
-
-    # Create RDS instance
-    print_info "Creating PostgreSQL database (this takes 5-10 minutes)..."
-    aws rds create-db-instance \
-        --db-instance-identifier $DB_IDENTIFIER \
-        --db-instance-class $DB_INSTANCE_CLASS \
-        --engine postgres \
-        --engine-version 15.7 \
-        --master-username $DB_USERNAME \
-        --master-user-password $DB_PASSWORD \
-        --allocated-storage 20 \
-        --storage-type gp2 \
-        --vpc-security-group-ids $rds_sg_id \
-        --db-subnet-group-name $SUBNET_GROUP_NAME \
-        --db-name $DB_NAME \
-        --backup-retention-period 7 \
-        --no-multi-az \
-        --publicly-accessible \
-        --region $REGION
-
-    print_info "Waiting for database to be available..."
-    aws rds wait db-instance-available --db-instance-identifier $DB_IDENTIFIER --region $REGION
-
-    local db_endpoint=$(aws rds describe-db-instances \
-        --db-instance-identifier $DB_IDENTIFIER \
-        --region $REGION \
-        --query 'DBInstances[0].Endpoint.Address' --output text)
-
-    print_status "Database deployed successfully at: $db_endpoint"
-}
 
 # Deploy backend
 deploy_backend() {
@@ -251,31 +165,8 @@ deploy_backend() {
     aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 22 --cidr 0.0.0.0/0 --region $REGION 2>/dev/null || true
     aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 80 --cidr 0.0.0.0/0 --region $REGION 2>/dev/null || true
 
-    # Update RDS security group to allow access from EC2
-    local rds_sg_id=$(aws ec2 describe-security-groups --group-names $RDS_SG_NAME --region $REGION --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || echo "")
-    if [ ! -z "$rds_sg_id" ]; then
-        aws ec2 authorize-security-group-ingress \
-            --group-id $rds_sg_id \
-            --protocol tcp \
-            --port 5432 \
-            --source-group $sg_id \
-            --region $REGION 2>/dev/null || true
-    fi
-
-    # Get database endpoint
-    local db_endpoint=""
-    if check_database_exists; then
-        db_endpoint=$(aws rds describe-db-instances \
-            --db-instance-identifier $DB_IDENTIFIER \
-            --region $REGION \
-            --query 'DBInstances[0].Endpoint.Address' --output text)
-    else
-        print_warning "Database not found. Deploy database first or use 'full' mode."
-        return 1
-    fi
-
     # Create user data script
-    create_userdata_script "$db_endpoint"
+    create_userdata_script
 
     # Launch EC2 instance
     print_info "Launching EC2 instance..."
@@ -323,6 +214,20 @@ update_backend() {
     print_info "Updating application on instance: $instance_id"
     print_info "Public IP: $public_ip"
 
+    # Check if SSH key exists
+    if [ ! -f "${KEY_NAME}.pem" ]; then
+        print_error "SSH key file '${KEY_NAME}.pem' not found."
+        print_info "Alternative update methods:"
+        print_info "1. Use AWS Systems Manager Session Manager:"
+        print_info "   aws ssm start-session --target $instance_id --region $REGION"
+        print_info "2. Recreate the key pair by running:"
+        print_info "   aws ec2 delete-key-pair --key-name $KEY_NAME --region $REGION"
+        print_info "   ./deploy.sh backend"
+        print_info "3. Redeploy the backend completely:"
+        print_info "   ./deploy.sh cleanup && ./deploy.sh backend"
+        return 1
+    fi
+
     # Create update script
     cat > update_app.sh << 'EOF'
 #!/bin/bash
@@ -342,7 +247,7 @@ git pull origin main || git pull origin master || echo "Git pull failed, continu
 
 # Install/update dependencies
 echo "Installing dependencies..."
-yarn install
+npm install
 
 # Restart application with PM2
 echo "Restarting application..."
@@ -353,22 +258,29 @@ EOF
 
     # Copy and execute update script
     print_info "Copying update script to instance..."
-    scp -i ${KEY_NAME}.pem -o StrictHostKeyChecking=no update_app.sh ubuntu@$public_ip:/tmp/
-
-    print_info "Executing update script..."
-    ssh -i ${KEY_NAME}.pem -o StrictHostKeyChecking=no ubuntu@$public_ip 'chmod +x /tmp/update_app.sh && /tmp/update_app.sh'
+    if scp -i ${KEY_NAME}.pem -o StrictHostKeyChecking=no update_app.sh ubuntu@$public_ip:/tmp/ 2>/dev/null; then
+        print_info "Executing update script..."
+        if ssh -i ${KEY_NAME}.pem -o StrictHostKeyChecking=no ubuntu@$public_ip 'chmod +x /tmp/update_app.sh && /tmp/update_app.sh' 2>/dev/null; then
+            print_status "Backend application updated successfully!"
+            print_info "Application URL: http://$public_ip"
+        else
+            print_error "Failed to execute update script via SSH."
+            print_info "Try using AWS Systems Manager instead:"
+            print_info "aws ssm start-session --target $instance_id --region $REGION"
+        fi
+    else
+        print_error "Failed to copy update script via SCP."
+        print_info "SSH connection failed. Alternative options:"
+        print_info "1. Use AWS Systems Manager: aws ssm start-session --target $instance_id --region $REGION"
+        print_info "2. Redeploy: ./deploy.sh cleanup && ./deploy.sh backend"
+    fi
 
     # Cleanup
     rm -f update_app.sh
-
-    print_status "Backend application updated successfully!"
-    print_info "Application URL: http://$public_ip"
 }
 
 # Create userdata script
 create_userdata_script() {
-    local db_endpoint=$1
-
     cat > userdata.sh << EOF
 #!/bin/bash
 set -e
@@ -471,9 +383,9 @@ EOF
 
 # Cleanup all resources
 cleanup_all() {
-    print_header "Cleaning Up All Resources"
+    print_header "Cleaning Up Backend Resources"
 
-    print_warning "This will delete ALL Email Analytics resources. Are you sure? (y/N)"
+    print_warning "This will delete the Email Analytics backend EC2 instance. Are you sure? (y/N)"
     read -r confirmation
     if [[ ! $confirmation =~ ^[Yy]$ ]]; then
         print_info "Cleanup cancelled."
@@ -497,45 +409,16 @@ cleanup_all() {
         print_warning "No EC2 instances found"
     fi
 
-    # Delete RDS instance
-    print_info "Deleting RDS database..."
-    if check_database_exists; then
-        aws rds delete-db-instance \
-            --db-instance-identifier $DB_IDENTIFIER \
-            --skip-final-snapshot \
-            --region $REGION
-        print_info "Waiting for database deletion..."
-        aws rds wait db-instance-deleted --db-instance-identifier $DB_IDENTIFIER --region $REGION
-        print_status "Database deleted"
-    else
-        print_warning "Database not found"
-    fi
-
     # Delete security groups
     print_info "Deleting security groups..."
     aws ec2 delete-security-group --group-name $EC2_SG_NAME --region $REGION 2>/dev/null && print_status "EC2 security group deleted" || print_warning "EC2 security group not found"
-    aws ec2 delete-security-group --group-name $RDS_SG_NAME --region $REGION 2>/dev/null && print_status "RDS security group deleted" || print_warning "RDS security group not found"
-
-    # Delete RDS subnet group
-    aws rds delete-db-subnet-group --db-subnet-group-name $SUBNET_GROUP_NAME --region $REGION 2>/dev/null && print_status "RDS subnet group deleted" || print_warning "RDS subnet group not found"
 
     print_status "Cleanup completed!"
 }
 
 # Check resource status
 check_resources() {
-    print_header "Resource Status Check"
-
-    # Check database
-    if check_database_exists; then
-        local db_endpoint=$(aws rds describe-db-instances \
-            --db-instance-identifier $DB_IDENTIFIER \
-            --region $REGION \
-            --query 'DBInstances[0].Endpoint.Address' --output text)
-        print_status "Database: Running at $db_endpoint"
-    else
-        print_warning "Database: Not found"
-    fi
+    print_header "Backend Status Check"
 
     # Check backend
     if check_backend_exists; then
@@ -543,6 +426,7 @@ check_resources() {
         local public_ip=$(get_backend_public_ip)
         print_status "Backend: Running (ID: $instance_id, IP: $public_ip)"
         print_info "Application URL: http://$public_ip"
+        print_info "Health Check: http://$public_ip/api/health"
     else
         print_warning "Backend: Not found"
     fi
@@ -550,40 +434,24 @@ check_resources() {
 
 # Show interactive menu
 show_menu() {
-    print_header "Email Analytics Deployment Tool"
-    echo "1) Full deployment (database + backend)"
-    echo "2) Database only"
-    echo "3) Backend only"
-    echo "4) Update backend application"
-    echo "5) Check resource status"
-    echo "6) Cleanup all resources"
-    echo "7) Exit"
+    print_header "Email Analytics Backend Deployment Tool"
+    echo "1) Deploy backend"
+    echo "2) Update backend application"
+    echo "3) Check backend status"
+    echo "4) Cleanup backend resources"
+    echo "5) Exit"
     echo
-    echo -n "Please select an option (1-7): "
+    echo -n "Please select an option (1-5): "
     read -r choice
     
     case $choice in
-        1) deploy_full ;;
-        2) deploy_database ;;
-        3) deploy_backend ;;
-        4) update_backend ;;
-        5) check_resources ;;
-        6) cleanup_all ;;
-        7) exit 0 ;;
+        1) deploy_backend ;;
+        2) update_backend ;;
+        3) check_resources ;;
+        4) cleanup_all ;;
+        5) exit 0 ;;
         *) print_error "Invalid option. Please try again." && show_menu ;;
     esac
-}
-
-# Deploy full stack
-deploy_full() {
-    print_header "Full Stack Deployment"
-    deploy_database
-    deploy_backend
-    
-    local public_ip=$(get_backend_public_ip)
-    print_status "Full deployment completed!"
-    print_info "Application URL: http://$public_ip"
-    print_info "Health Check: http://$public_ip/health"
 }
 
 # Main execution
@@ -592,12 +460,6 @@ main() {
     check_aws_setup
 
     case "${1:-}" in
-        "full")
-            deploy_full
-            ;;
-        "database")
-            deploy_database
-            ;;
         "backend")
             deploy_backend
             ;;
@@ -614,15 +476,13 @@ main() {
             show_menu
             ;;
         *)
-            echo "Usage: $0 [full|database|backend|update|cleanup|status]"
+            echo "Usage: $0 [backend|update|cleanup|status]"
             echo
             echo "Modes:"
-            echo "  full      - Deploy complete stack (database + backend)"
-            echo "  database  - Deploy only RDS database"
-            echo "  backend   - Deploy only EC2 backend application"
+            echo "  backend   - Deploy EC2 backend application"
             echo "  update    - Update existing backend application code"
-            echo "  cleanup   - Delete all resources"
-            echo "  status    - Check resource status"
+            echo "  cleanup   - Delete backend resources"
+            echo "  status    - Check backend status"
             echo
             echo "Interactive mode: Run without arguments"
             exit 1
