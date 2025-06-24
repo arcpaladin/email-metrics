@@ -1,10 +1,10 @@
-import express from 'express';
-import { createServer } from 'http';
-import dotenv from 'dotenv';
-import swaggerUi from 'swagger-ui-express';
-import swaggerJsdoc from 'swagger-jsdoc';
-import { neon } from '@neondatabase/serverless';
-import jwt from 'jsonwebtoken';
+const express = require('express');
+const { createServer } = require('http');
+const dotenv = require('dotenv');
+const swaggerUi = require('swagger-ui-express');
+const swaggerJsdoc = require('swagger-jsdoc');
+const { neon } = require('@neondatabase/serverless');
+const jwt = require('jsonwebtoken');
 
 // Load environment variables
 dotenv.config();
