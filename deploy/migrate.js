@@ -1,5 +1,5 @@
-import { neon } from '@neondatabase/serverless';
-import dotenv from 'dotenv';
+const { neon } = require('@neondatabase/serverless');
+const dotenv = require('dotenv');
 
 // Load environment variables
 dotenv.config();
@@ -142,7 +142,7 @@ async function runMigrations() {
 }
 
 // Run migrations if this file is executed directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (require.main === module) {
   runMigrations()
     .then(() => {
       console.log('Migration process completed.');
@@ -154,4 +154,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     });
 }
 
-export { runMigrations };
+module.exports = { runMigrations };

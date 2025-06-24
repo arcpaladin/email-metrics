@@ -109,6 +109,98 @@ get_backend_public_ip() {
     fi
 }
 
+# Update ecosystem.config.js with EC2 IP
+update_ecosystem_config() {
+    local public_ip=$1
+    local ecosystem_file="deploy/ecosystem.config.js"
+    
+    if [ -f "$ecosystem_file" ]; then
+        print_info "Updating ecosystem.config.js with EC2 IP: $public_ip"
+        
+        # Create backup
+        cp "$ecosystem_file" "${ecosystem_file}.backup"
+        
+        # Update the placeholder with actual IP
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            # macOS
+            sed -i '' "s/PLACEHOLDER_EC2_IP/$public_ip/g" "$ecosystem_file"
+        else
+            # Linux
+            sed -i "s/PLACEHOLDER_EC2_IP/$public_ip/g" "$ecosystem_file"
+        fi
+        
+        print_status "Ecosystem config updated successfully"
+        print_info "You can now use: pm2 deploy production"
+    else
+        print_warning "ecosystem.config.js not found at $ecosystem_file"
+    fi
+}
+
+# Copy SSH key locally for PM2 deployment
+copy_ssh_key_locally() {
+    print_info "Copying SSH key locally for PM2 deployment..."
+    
+    # Check if key exists locally
+    if [ -f "${KEY_NAME}.pem" ]; then
+        print_warning "SSH key ${KEY_NAME}.pem already exists locally"
+        return 0
+    fi
+    
+    # Try to get the key from AWS if it exists
+    if aws ec2 describe-key-pairs --key-names $KEY_NAME --region $REGION &>/dev/null; then
+        print_error "Key pair exists in AWS but private key is not available locally."
+        print_info "AWS doesn't store private keys. You need to:"
+        print_info "1. Delete the existing key pair: aws ec2 delete-key-pair --key-name $KEY_NAME --region $REGION"
+        print_info "2. Redeploy to create a new key: ./deploy.sh backend"
+        return 1
+    else
+        print_error "Key pair '$KEY_NAME' doesn't exist in AWS."
+        print_info "Run './deploy.sh backend' to create the infrastructure and SSH key."
+        return 1
+    fi
+}
+
+# Setup PM2 deployment (copy key and update config)
+setup_pm2_deployment() {
+    print_header "Setting up PM2 Deployment"
+    
+    # Check if backend exists
+    if ! check_backend_exists; then
+        print_error "Backend instance not found. Deploy backend first with: ./deploy.sh backend"
+        return 1
+    fi
+    
+    # Get instance details
+    local instance_id=$(get_backend_instance_id)
+    local public_ip=$(get_backend_public_ip)
+    
+    print_info "Backend instance found:"
+    print_info "Instance ID: $instance_id"
+    print_info "Public IP: $public_ip"
+    
+    # Update ecosystem config with current IP
+    update_ecosystem_config "$public_ip"
+    
+    # Check if SSH key exists locally
+    if [ ! -f "${KEY_NAME}.pem" ]; then
+        print_warning "SSH key not found locally. Attempting to resolve..."
+        copy_ssh_key_locally
+        
+        if [ ! -f "${KEY_NAME}.pem" ]; then
+            print_error "Cannot proceed with PM2 deployment without SSH key."
+            print_info "Alternative: Use AWS Systems Manager for server access:"
+            print_info "aws ssm start-session --target $instance_id --region $REGION"
+            return 1
+        fi
+    fi
+    
+    print_status "PM2 deployment setup complete!"
+    print_info "You can now run:"
+    print_info "  pm2 deploy production setup    # First time setup"
+    print_info "  pm2 deploy production          # Deploy application"
+    print_info "  pm2 deploy production update   # Update application"
+}
+
 
 # Deploy backend
 deploy_backend() {
@@ -197,6 +289,9 @@ deploy_backend() {
     print_info "Instance ID: $instance_id"
     print_info "Public IP: $public_ip"
     print_info "Application URL: http://$public_ip"
+    
+    # Update ecosystem.config.js with the new IP
+    update_ecosystem_config "$public_ip"
 }
 
 # Update backend application
@@ -592,17 +687,21 @@ main() {
         "status")
             check_resources
             ;;
+        "pm2")
+            setup_pm2_deployment
+            ;;
         "")
             show_menu
             ;;
         *)
-            echo "Usage: $0 [backend|update|cleanup|status]"
+            echo "Usage: $0 [backend|update|cleanup|status|pm2]"
             echo
             echo "Modes:"
             echo "  backend   - Deploy EC2 backend application"
             echo "  update    - Update existing backend application code"
             echo "  cleanup   - Delete backend resources"
             echo "  status    - Check backend status"
+            echo "  pm2       - Setup PM2 deployment (copy SSH key and update config)"
             echo
             echo "Interactive mode: Run without arguments"
             exit 1
