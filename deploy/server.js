@@ -286,9 +286,11 @@ app.use((err, req, res, next) => {
 
 const server = createServer(app);
 
-server.listen(PORT, () => {
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`Email Analytics API running on port ${PORT}`);
   console.log(`API Documentation: http://localhost:${PORT}/api/docs`);
   console.log(`Health Check: http://localhost:${PORT}/api/health`);
   console.log(`Database: ${process.env.DATABASE_URL ? 'Connected to Neon' : 'Not configured'}`);
+  console.log(`Environment: ${process.env.NODE_ENV}`);
+  console.log(`Server started at: ${new Date().toISOString()}`);
 });

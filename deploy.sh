@@ -285,37 +285,79 @@ create_userdata_script() {
 #!/bin/bash
 set -e
 
-# Enable logging
+# Enable comprehensive logging
 exec > >(tee /var/log/user-data.log)
 exec 2>&1
 
-echo "Starting user-data script at \$(date)"
+echo "========================================="
+echo "Email Analytics Backend Deployment Log"
+echo "Started at: \$(date)"
+echo "Instance ID: \$(curl -s http://169.254.169.254/latest/meta-data/instance-id)"
+echo "Public IP: \$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)"
+echo "========================================="
+
+# Function to log with timestamp
+log_info() {
+    echo "[\$(date '+%Y-%m-%d %H:%M:%S')] INFO: \$1"
+}
+
+log_error() {
+    echo "[\$(date '+%Y-%m-%d %H:%M:%S')] ERROR: \$1"
+}
+
+log_success() {
+    echo "[\$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS: \$1"
+}
 
 # Update system
-echo "Updating system packages..."
-apt-get update -y
-apt-get install -y git curl unzip awscli
+log_info "Updating system packages..."
+if apt-get update -y && apt-get install -y git curl unzip awscli; then
+    log_success "System packages updated successfully"
+else
+    log_error "Failed to update system packages"
+    exit 1
+fi
 
 # Install NVM (Node Version Manager)
-echo "Installing NVM (Node Version Manager)..."
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+log_info "Installing NVM (Node Version Manager)..."
+if curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash; then
+    log_success "NVM installed successfully"
+else
+    log_error "Failed to install NVM"
+    exit 1
+fi
 
 # Source NVM to make it available in current session
 export NVM_DIR="\$HOME/.nvm"
 [ -s "\$NVM_DIR/nvm.sh" ] && \. "\$NVM_DIR/nvm.sh"
 
 # Install Node.js 18 via NVM
-echo "Installing Node.js 18 via NVM..."
-nvm install 18
-nvm use 18
-nvm alias default 18
+log_info "Installing Node.js 18 via NVM..."
+if nvm install 18 && nvm use 18 && nvm alias default 18; then
+    log_success "Node.js 18 installed successfully"
+    node --version
+    npm --version
+else
+    log_error "Failed to install Node.js 18"
+    exit 1
+fi
 
 # Install PM2 globally
-echo "Installing PM2..."
-npm install -g pm2
+log_info "Installing PM2 globally..."
+if npm install -g pm2; then
+    log_success "PM2 installed successfully"
+    pm2 --version
+else
+    log_error "Failed to install PM2"
+    exit 1
+fi
 
-# Also install for ubuntu user
-echo "Setting up NVM and tools for ubuntu user..."
+# Create app directory as ubuntu user
+log_info "Creating application directory..."
+sudo -u ubuntu mkdir -p /home/ubuntu/app
+
+# Setup NVM and Node.js as ubuntu user
+log_info "Setting up NVM and Node.js for ubuntu user..."
 sudo -u ubuntu bash -c '
 export NVM_DIR="/home/ubuntu/.nvm"
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
@@ -324,26 +366,80 @@ nvm install 18
 nvm use 18
 nvm alias default 18
 npm install -g pm2
+echo "Ubuntu user NVM setup completed"
 '
 
-# Create app directory
-echo "Creating application directory..."
-mkdir -p /home/ubuntu/app
-cd /home/ubuntu/app
-chown -R ubuntu:ubuntu /home/ubuntu/app
-
 # Clone repository to get deployment files
-echo "Cloning repository..."
-git clone https://github.com/arcpaladin/email-metrics.git temp-repo || true
+log_info "Cloning repository for deployment files..."
+if git clone https://github.com/arcpaladin/email-metrics.git /tmp/temp-repo; then
+    log_success "Repository cloned successfully to /tmp/temp-repo"
+    
+    # List what we have in the repository
+    echo "Repository contents:"
+    ls -la /tmp/temp-repo/
+    echo "Deploy directory contents:"
+    ls -la /tmp/temp-repo/deploy/ || echo "Deploy directory not found"
+else
+    log_error "Failed to clone repository"
+    exit 1
+fi
 
-# Copy deployment files
-echo "Setting up deployment files..."
-cp temp-repo/deploy/package.json . || echo "Warning: Could not copy package.json"
-cp temp-repo/deploy/server.js . || echo "Warning: Could not copy server.js"
-cp temp-repo/deploy/ecosystem.config.js . || echo "Warning: Could not copy ecosystem.config.js"
-cp temp-repo/deploy/migrate.js . || echo "Warning: Could not copy migrate.js"
+# Change ownership of the cloned repo to ubuntu user
+chown -R ubuntu:ubuntu /tmp/temp-repo
 
-# Create environment file
+# Change to app directory and copy files as ubuntu user
+log_info "Setting up application files..."
+sudo -u ubuntu bash -c '
+cd /home/ubuntu/app
+
+# Copy deployment files from the correct path
+if [ -f /tmp/temp-repo/deploy/package.json ]; then
+    cp /tmp/temp-repo/deploy/package.json .
+    echo "✅ Copied package.json"
+else
+    echo "❌ Warning: package.json not found at /tmp/temp-repo/deploy/"
+fi
+
+if [ -f /tmp/temp-repo/deploy/server.js ]; then
+    cp /tmp/temp-repo/deploy/server.js .
+    echo "✅ Copied server.js"
+else
+    echo "❌ Warning: server.js not found at /tmp/temp-repo/deploy/"
+fi
+
+if [ -f /tmp/temp-repo/deploy/ecosystem.config.js ]; then
+    cp /tmp/temp-repo/deploy/ecosystem.config.js .
+    echo "✅ Copied ecosystem.config.js"
+else
+    echo "❌ Warning: ecosystem.config.js not found at /tmp/temp-repo/deploy/"
+fi
+
+if [ -f /tmp/temp-repo/deploy/migrate.js ]; then
+    cp /tmp/temp-repo/deploy/migrate.js .
+    echo "✅ Copied migrate.js"
+else
+    echo "❌ Warning: migrate.js not found at /tmp/temp-repo/deploy/"
+fi
+
+# List files to verify what we copied
+echo "📁 Files in app directory after copying:"
+ls -la /home/ubuntu/app/
+
+# Verify file contents
+echo "📄 Checking if server.js has content:"
+if [ -f /home/ubuntu/app/server.js ]; then
+    echo "server.js size: \$(wc -c < /home/ubuntu/app/server.js) bytes"
+    echo "First few lines of server.js:"
+    head -5 /home/ubuntu/app/server.js
+else
+    echo "❌ server.js not found in app directory"
+fi
+'
+
+# Create environment file as ubuntu user
+log_info "Creating environment file..."
+sudo -u ubuntu bash -c '
+cd /home/ubuntu/app
 cat > .env << ENVEOF
 NODE_ENV=production
 PORT=80
@@ -357,23 +453,47 @@ MICROSOFT_TENANT_ID=$MICROSOFT_TENANT_ID
 OPENAI_API_KEY=$OPENAI_API_KEY
 SESSION_SECRET=$SESSION_SECRET
 ENVEOF
+echo "Environment file created"
+'
+
+# Install dependencies and start application as ubuntu user
+log_info "Installing dependencies and starting application..."
+sudo -u ubuntu bash -c '
+cd /home/ubuntu/app
+export NVM_DIR="/home/ubuntu/.nvm"
+source /home/ubuntu/.nvm/nvm.sh
 
 # Install dependencies
-echo "Installing dependencies..."
-npm install
+echo "Installing npm dependencies..."
+if npm install; then
+    echo "Dependencies installed successfully"
+else
+    echo "Failed to install dependencies"
+    exit 1
+fi
 
 # Run database migrations
 echo "Running database migrations..."
 npm run migrate || echo "Migration failed or not needed"
 
 # Start application with PM2
-echo "Starting application..."
-pm2 start ecosystem.config.js
+echo "Starting application with PM2..."
+if pm2 start ecosystem.config.js; then
+    echo "Application started successfully"
+    pm2 status
+else
+    echo "Failed to start application with PM2, trying direct start..."
+    pm2 start server.js --name email-analytics
+fi
+
+# Setup PM2 startup
 pm2 startup systemd -u ubuntu --hp /home/ubuntu
 pm2 save
+'
 
 # Cleanup
-rm -rf temp-repo
+log_info "Cleaning up temporary files..."
+rm -rf /tmp/temp-repo
 
 echo "✅ Application deployed successfully at \$(date)"
 echo "🔗 API URL: http://\$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)"
