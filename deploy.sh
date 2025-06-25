@@ -256,6 +256,8 @@ deploy_backend() {
     # Add rules for web server
     aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 22 --cidr 0.0.0.0/0 --region $REGION 2>/dev/null || true
     aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 80 --cidr 0.0.0.0/0 --region $REGION 2>/dev/null || true
+    aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 443 --cidr 0.0.0.0/0 --region $REGION 2>/dev/null || true
+    aws ec2 authorize-security-group-ingress --group-id $sg_id --protocol tcp --port 3000 --cidr 0.0.0.0/0 --region $REGION 2>/dev/null || true
 
     # Create user data script
     create_userdata_script
@@ -586,29 +588,79 @@ pm2 startup systemd -u ubuntu --hp /home/ubuntu
 pm2 save
 '
 
-# Configure Nginx
-log_info "Configuring Nginx..."
+# Generate SSL certificate
+log_info "Generating self-signed SSL certificate..."
+mkdir -p /etc/ssl/private
+mkdir -p /etc/ssl/certs
+
+# Generate private key
+openssl genrsa -out /etc/ssl/private/nginx-selfsigned.key 2048
+
+# Generate certificate signing request and certificate
 PUBLIC_IP=\$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+openssl req -new -x509 -key /etc/ssl/private/nginx-selfsigned.key -out /etc/ssl/certs/nginx-selfsigned.crt -days 365 -subj "/C=US/ST=State/L=City/O=Organization/OU=OrgUnit/CN=\$PUBLIC_IP" -addext "subjectAltName=IP:\$PUBLIC_IP"
+
+# Set proper permissions
+chmod 600 /etc/ssl/private/nginx-selfsigned.key
+chmod 644 /etc/ssl/certs/nginx-selfsigned.crt
+
+log_success "SSL certificate generated successfully"
+
+# Generate Diffie-Hellman parameters for enhanced security
+log_info "Generating Diffie-Hellman parameters (this may take a few minutes)..."
+openssl dhparam -out /etc/ssl/certs/dhparam.pem 2048
+log_success "Diffie-Hellman parameters generated"
+
+# Configure Nginx
+log_info "Configuring Nginx with HTTPS..."
 
 # Create Nginx configuration for the application
 cat > /etc/nginx/sites-available/email-analytics << NGINXEOF
+# HTTP server (redirects to HTTPS)
 server {
     listen 80;
-    server_name $PUBLIC_IP;
+    server_name \$PUBLIC_IP;
+    
+    # Redirect all HTTP traffic to HTTPS
+    return 301 https://\$server_name\$request_uri;
+}
+
+# HTTPS server
+server {
+    listen 443 ssl http2;
+    server_name \$PUBLIC_IP;
+
+    # SSL Configuration
+    ssl_certificate /etc/ssl/certs/nginx-selfsigned.crt;
+    ssl_certificate_key /etc/ssl/private/nginx-selfsigned.key;
+    ssl_dhparam /etc/ssl/certs/dhparam.pem;
+
+    # SSL Security Settings
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-SHA384;
+    ssl_ecdh_curve secp384r1;
+    ssl_session_timeout 10m;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_tickets off;
+    ssl_stapling on;
+    ssl_stapling_verify on;
 
     # Security headers
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-XSS-Protection "1; mode=block" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "no-referrer-when-downgrade" always;
     add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
+    add_header X-Robots-Tag "noindex, nofollow" always;
 
     # Gzip compression
     gzip on;
     gzip_vary on;
     gzip_min_length 1024;
     gzip_proxied expired no-cache no-store private must-revalidate auth;
-    gzip_types text/plain text/css text/xml text/javascript application/x-javascript application/xml+rss application/javascript;
+    gzip_types text/plain text/css text/xml text/javascript application/x-javascript application/xml+rss application/javascript application/json;
 
     # Main application proxy to port 3000
     location / {
@@ -620,8 +672,11 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$server_name;
         proxy_cache_bypass \$http_upgrade;
         proxy_read_timeout 86400;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
     }
 
     # Health check endpoint
@@ -632,6 +687,7 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$server_name;
     }
 
     # API endpoints
@@ -642,16 +698,27 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$server_name;
         proxy_read_timeout 86400;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
     }
 
     # Static files caching
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto \$scheme;
         expires 1y;
         add_header Cache-Control "public, immutable";
+        add_header Vary "Accept-Encoding";
+    }
+
+    # Security.txt (optional)
+    location = /.well-known/security.txt {
+        return 200 "Contact: security@example.com\nExpires: 2025-12-31T23:59:59.000Z\n";
+        add_header Content-Type text/plain;
     }
 
     # Error pages
@@ -660,6 +727,22 @@ server {
     
     location = /50x.html {
         root /var/www/html;
+    }
+}
+
+# Additional server block for direct port 3000 access (HTTP only for debugging)
+server {
+    listen 3000;
+    server_name \$PUBLIC_IP;
+    
+    # Simple proxy without SSL for direct debugging access
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto http;
     }
 }
 NGINXEOF
@@ -714,11 +797,14 @@ log_info "Cleaning up temporary files..."
 rm -rf /tmp/temp-repo
 
 echo "✅ Application deployed successfully at \$(date)"
-echo "🔗 API URL: http://\$PUBLIC_IP"
-echo "📚 API Docs: http://\$PUBLIC_IP/api/docs"
-echo "🏥 Health Check: http://\$PUBLIC_IP/health"
+echo "🔗 HTTPS URL: https://\$PUBLIC_IP (Primary - Self-signed certificate)"
+echo "🔗 HTTP URL: http://\$PUBLIC_IP (Redirects to HTTPS)"
+echo "📚 API Docs: https://\$PUBLIC_IP/api/docs"
+echo "🏥 Health Check: https://\$PUBLIC_IP/health"
+echo "🔧 Direct App Access: http://\$PUBLIC_IP:3000 (For debugging)"
 echo "🌐 Nginx Status: \$(systemctl is-active nginx)"
-echo "📱 Application Port: 3000 (proxied through Nginx on port 80)"
+echo "🔒 SSL Certificate: Self-signed (Browser will show warning - click 'Advanced' → 'Proceed')"
+echo "📱 Application Port: 3000 (proxied through Nginx on ports 80→443)"
 EOF
 }
 
@@ -766,8 +852,12 @@ check_resources() {
         local instance_id=$(get_backend_instance_id)
         local public_ip=$(get_backend_public_ip)
         print_status "Backend: Running (ID: $instance_id, IP: $public_ip)"
-        print_info "Application URL: http://$public_ip"
-        print_info "Health Check: http://$public_ip/api/health"
+        print_info "🔗 HTTPS URL: https://$public_ip (Primary)"
+        print_info "🔗 HTTP URL: http://$public_ip (Redirects to HTTPS)"
+        print_info "📚 API Docs: https://$public_ip/api/docs"
+        print_info "🏥 Health Check: https://$public_ip/health"
+        print_info "🔧 Direct App: http://$public_ip:3000 (Debug)"
+        print_info "🔒 SSL: Self-signed certificate (browser warning expected)"
     else
         print_warning "Backend: Not found"
     fi
