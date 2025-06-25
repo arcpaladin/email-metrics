@@ -406,7 +406,7 @@ log_success() {
 
 # Update system
 log_info "Updating system packages..."
-if apt-get update -y && apt-get install -y git curl unzip awscli; then
+if apt-get update -y && apt-get install -y git curl unzip awscli nginx; then
     log_success "System packages updated successfully"
 else
     log_error "Failed to update system packages"
@@ -537,7 +537,7 @@ sudo -u ubuntu bash -c '
 cd /home/ubuntu/app
 cat > .env << ENVEOF
 NODE_ENV=production
-PORT=80
+PORT=3000
 DATABASE_URL=$DATABASE_URL
 JWT_SECRET=$JWT_SECRET
 FRONTEND_URL=$FRONTEND_URL
@@ -586,13 +586,139 @@ pm2 startup systemd -u ubuntu --hp /home/ubuntu
 pm2 save
 '
 
+# Configure Nginx
+log_info "Configuring Nginx..."
+PUBLIC_IP=\$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+
+# Create Nginx configuration for the application
+cat > /etc/nginx/sites-available/email-analytics << NGINXEOF
+server {
+    listen 80;
+    server_name $PUBLIC_IP;
+
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer-when-downgrade" always;
+    add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
+
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_proxied expired no-cache no-store private must-revalidate auth;
+    gzip_types text/plain text/css text/xml text/javascript application/x-javascript application/xml+rss application/javascript;
+
+    # Main application proxy to port 3000
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_cache_bypass \$http_upgrade;
+        proxy_read_timeout 86400;
+    }
+
+    # Health check endpoint
+    location /health {
+        proxy_pass http://127.0.0.1:3000/api/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    # API endpoints
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 86400;
+    }
+
+    # Static files caching
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # Error pages
+    error_page 404 /404.html;
+    error_page 500 502 503 504 /50x.html;
+    
+    location = /50x.html {
+        root /var/www/html;
+    }
+}
+NGINXEOF
+
+# Enable the site
+ln -sf /etc/nginx/sites-available/email-analytics /etc/nginx/sites-enabled/
+
+# Remove default nginx site
+rm -f /etc/nginx/sites-enabled/default
+
+# Test nginx configuration
+if nginx -t; then
+    log_success "Nginx configuration is valid"
+else
+    log_error "Nginx configuration is invalid"
+    exit 1
+fi
+
+# Update application to run on port 3000
+log_info "Updating application to run on port 3000..."
+sudo -u ubuntu bash -c '
+cd /home/ubuntu/app
+# Update the .env file to use port 3000
+sed -i "s/PORT=80/PORT=3000/g" .env
+echo "Updated PORT to 3000 in .env file"
+
+# Restart the application with new port
+export NVM_DIR="/home/ubuntu/.nvm"
+source /home/ubuntu/.nvm/nvm.sh
+pm2 restart email-analytics || pm2 start server.js --name email-analytics --env production
+pm2 save
+'
+
+# Start and enable nginx
+log_info "Starting Nginx..."
+if systemctl start nginx && systemctl enable nginx; then
+    log_success "Nginx started and enabled successfully"
+else
+    log_error "Failed to start Nginx"
+    exit 1
+fi
+
+# Verify nginx is running
+if systemctl is-active --quiet nginx; then
+    log_success "Nginx is running"
+else
+    log_error "Nginx is not running"
+fi
+
 # Cleanup
 log_info "Cleaning up temporary files..."
 rm -rf /tmp/temp-repo
 
 echo "✅ Application deployed successfully at \$(date)"
-echo "🔗 API URL: http://\$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)"
-echo "📚 API Docs: http://\$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)/api/docs"
+echo "🔗 API URL: http://\$PUBLIC_IP"
+echo "📚 API Docs: http://\$PUBLIC_IP/api/docs"
+echo "🏥 Health Check: http://\$PUBLIC_IP/health"
+echo "🌐 Nginx Status: \$(systemctl is-active nginx)"
+echo "📱 Application Port: 3000 (proxied through Nginx on port 80)"
 EOF
 }
 
